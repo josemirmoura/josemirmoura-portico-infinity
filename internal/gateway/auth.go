@@ -64,10 +64,18 @@ func (a AuthConfig) Wrap(next http.Handler) http.Handler {
 		})
 	}
 
+	// The upstream SDK v1.8.0 omits the RFC 6750 insufficient_scope error
+	// parameter. Decorate only the SDK's pre-auth 403 scope challenge, never
+	// downstream Broker/application 403 responses.
 	protected := mcpauth.RequireBearerToken(verifier, &mcpauth.RequireBearerTokenOptions{
 		Scopes:              a.RequiredScopes,
 		ResourceMetadataURL: a.ResourceMetadataURL,
 	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Reaching this handler means the SDK accepted the bearer and its scopes.
+		// A later 403 is not an OAuth scope challenge and must not be rewritten.
+		if sw, ok := w.(*scopeChallengeWriter); ok {
+			sw.authenticated = true
+		}
 		info := mcpauth.TokenInfoFromContext(r.Context())
 		if info == nil || info.UserID == "" {
 			http.Error(w, "authenticated token has no subject", http.StatusUnauthorized)
@@ -75,7 +83,53 @@ func (a AuthConfig) Wrap(next http.Handler) http.Handler {
 		}
 		subjectMiddleware(next, info.UserID).ServeHTTP(w, r)
 	}))
-	return protected
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		protected.ServeHTTP(&scopeChallengeWriter{
+			ResponseWriter: w,
+			requiredScopes: a.RequiredScopes,
+		}, r)
+	})
+}
+
+// scopeChallengeWriter augments the SDK's missing OAuth error parameter
+// without performing authorization or changing the actual 403 decision.
+// The inner, already-authorized handler sets authenticated before execution.
+// Unwrap and Flush preserve response-control and streaming behavior.
+type scopeChallengeWriter struct {
+	http.ResponseWriter
+	requiredScopes []string
+	authenticated bool
+}
+
+func (w *scopeChallengeWriter) WriteHeader(status int) {
+	if status == http.StatusForbidden && !w.authenticated && len(w.requiredScopes) > 0 {
+		challenges := w.Header().Values("WWW-Authenticate")
+		wantScope := `scope="` + strings.Join(w.requiredScopes, " ") + `"`
+		changed := false
+		for i, challenge := range challenges {
+			if strings.HasPrefix(strings.ToLower(challenge), "bearer ") &&
+				strings.Contains(challenge, wantScope) &&
+				!strings.Contains(strings.ToLower(challenge), "error=") {
+				challenges[i] = `Bearer error="insufficient_scope", ` + strings.TrimSpace(challenge[len("Bearer "):])
+				changed = true
+			}
+		}
+		if changed {
+			w.Header().Del("WWW-Authenticate")
+			for _, challenge := range challenges {
+				w.Header().Add("WWW-Authenticate", challenge)
+			}
+		}
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *scopeChallengeWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func (w *scopeChallengeWriter) Flush() {
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
 }
 
 func subjectMiddleware(next http.Handler, subject string) http.Handler {

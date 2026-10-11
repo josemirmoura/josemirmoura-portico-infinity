@@ -152,6 +152,7 @@ func TestGateCVerifiedHTTPSIntrospectionToBroker(t *testing.T) {
 		}
 		if code, _, hdr := request("wrong-scope",allowed,""); code != http.StatusForbidden ||
 			!strings.Contains(hdr.Get("WWW-Authenticate"),"scope=") ||
+			!strings.Contains(hdr.Get("WWW-Authenticate"),`error="insufficient_scope"`) ||
 			!strings.Contains(hdr.Get("WWW-Authenticate"),"portico.read") {
 			t.Fatalf("valid bearer with insufficient scope must return 403 and a Bearer scope challenge; HTTP %d",code)
 		}
