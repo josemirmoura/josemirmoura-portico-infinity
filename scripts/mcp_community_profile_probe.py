@@ -157,7 +157,16 @@ def probe(url: str) -> dict:
                 raise ProfileFailure("synthetic diagnostic resource or prompt exposed")
             if str(item.get("uri", "")).startswith("test://"):
                 raise ProfileFailure("test:// fixture resource exposed")
-    checks.append("production prompts/resources have no synthetic fixture")
+    status, response = rpc(url, "resources/templates/list", {"_meta": META}, 303)
+    templates = checked_result(status, response, "resources/templates/list").get("resourceTemplates")
+    if not isinstance(templates, list):
+        raise ProfileFailure("resources/templates/list omitted resourceTemplates array")
+    for template in templates:
+        if not isinstance(template, dict):
+            raise ProfileFailure("invalid resource template descriptor")
+        if is_synthetic(str(template.get("name", ""))) or str(template.get("uriTemplate", "")).startswith("test://"):
+            raise ProfileFailure("synthetic resource template exposed in production catalog")
+    checks.append("production prompts/resources/templates have no synthetic fixture")
 
     status, response = rpc(url, "tools/call", {"name": "system.info", "arguments": {}, "_meta": META}, 401)
     result = checked_result(status, response, "system.info")
