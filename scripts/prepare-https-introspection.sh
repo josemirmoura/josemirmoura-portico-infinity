@@ -75,12 +75,25 @@ echo "Checking trusted HTTPS introspection from a disposable Gateway container..
 if ! "${compose[@]}" run --rm -T --no-deps \
   -e "VPS_AGENT_INTEGRATED_INTROSPECTION_URL=$target" \
   --entrypoint /bin/sh gateway -ceu '
-    exec curl --noproxy "*" --proto "=https" --max-redirs 0 \
-      --fail --silent --show-error --connect-timeout 5 --max-time 12 \
-      --request POST --url "$VPS_AGENT_INTEGRATED_INTROSPECTION_URL" \
-      --user "$VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_ID:$VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_SECRET" \
-      --header "Content-Type: application/x-www-form-urlencoded" \
-      --data "token=deliberately-invalid-migration-preflight"
+    # Supply Basic Auth through a private pipe to curl config. Keeping the
+    # secret out of the curl process arguments limits /proc disclosure.
+    authorization="$VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_ID:$VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_SECRET"
+    case "$authorization" in
+      *\"*|*\\*) echo "BLOCKED: unsupported introspection credential format" >&2; exit 2 ;;
+    esac
+    # A curl config entry must be exactly one printable quoted line.
+    raw_bytes="$(printf "%s" "$authorization" | LC_ALL=C wc -c)"
+    graphic_bytes="$(printf "%s" "$authorization" | LC_ALL=C tr -cd "[:graph:]" | wc -c)"
+    if [ "$raw_bytes" -ne "$graphic_bytes" ]; then
+      echo "BLOCKED: unsafe introspection credential characters" >&2
+      exit 2
+    fi
+    printf "user = \"%s\"\\n" "$authorization" |
+      curl -q --config - --noproxy "*" --proto "=https" --max-redirs 0 \
+        --fail --silent --show-error --connect-timeout 5 --max-time 12 \
+        --request POST --url "$VPS_AGENT_INTEGRATED_INTROSPECTION_URL" \
+        --header "Content-Type: application/x-www-form-urlencoded" \
+        --data "token=deliberately-invalid-migration-preflight"
   ' >"$tmp/response.json"; then
   echo "BLOCKED: trusted HTTPS introspection was not reachable from Gateway's network." >&2
   exit 1
