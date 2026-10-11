@@ -18,6 +18,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Gate C A1 migration preflight and rollback-safe config unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/prepare-https-introspection.sh
+          bash -n scripts/setup-integrated-auth.sh
+          bash -n scripts/verify-public.sh
+          python3 -m unittest discover -s tests/scripts -p 'test_prepare_https_introspection.py' -v
+
       - name: Prepare isolated identity stack
         shell: bash
         run: |
