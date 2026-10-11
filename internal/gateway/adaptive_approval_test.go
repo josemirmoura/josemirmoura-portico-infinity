@@ -33,6 +33,7 @@ func TestApprovalCapabilityNegotiation(t *testing.T) {
 }
 
 func TestMCPAppsResourceAndTextFallbackSharePersistentRequest(t *testing.T) {
+	t.Setenv("PORTICO_APPROVAL_SURFACE", "adaptive")
 	t.Setenv("VPS_AGENT_MCP_APPS", "1")
 	t.Setenv("VPS_AGENT_OPERATOR_PORTAL_URL", "https://operator.example.test/operator")
 	t.Setenv("PORTICO_OPERATOR_FRAME_ANCESTORS", "https://host.example.test")
@@ -74,5 +75,53 @@ func TestMCPAppsResourceAndTextFallbackSharePersistentRequest(t *testing.T) {
 			}
 		}
 		session.Close()
+	}
+}
+
+func TestCommunityExternalHTTPSIsDefaultEvenWithNativeClientCapabilities(t *testing.T) {
+	t.Setenv("PORTICO_APPROVAL_SURFACE", "")
+	t.Setenv("VPS_AGENT_MCP_APPS", "1")
+	t.Setenv("VPS_AGENT_OPERATOR_PORTAL_URL", "https://operator.example.test/operator")
+	ts := httptest.NewServer(Handler(approvalExecutor{}, AuthConfig{Mode: "none", StaticSubject: "alice"}))
+	defer ts.Close()
+
+	// This client advertises both MCP Apps and elicitation. Neither should
+	// hijack the independently authenticated external operator workflow.
+	options := &mcp.ClientOptions{
+		Capabilities: &mcp.ClientCapabilities{
+			Extensions: map[string]any{approvalExtension: map[string]any{"mimeTypes": []string{approvalAppMIME}}},
+			Elicitation: &mcp.ElicitationCapabilities{},
+		},
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "portico-external-default-test", Version: "1"}, options)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: ts.URL + "/mcp"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "permissions.request_root_access",
+		Arguments: map[string]any{"root": "/opt/project-a", "access": "read", "ttl_seconds": 300},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("request failed err=%v result=%+v", err, res)
+	}
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"operator_web", "operator_approval_url", "https://operator.example.test/operator?request=",
+		"permissions.approval_status", "retry_after_seconds",
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("missing %q from default external approval output: %s", want, raw)
+		}
+	}
+	for _, forbidden := range []string{"approval_token", "\"approval_method\":\"mcp_apps\"", "operator_navigation"} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("unsafe or wrong approval channel %q in output: %s", forbidden, raw)
+		}
 	}
 }

@@ -1,5 +1,8 @@
 # Autorizações adaptativas por cliente MCP
 
+> **Community: decisão do operador em 11/10/2026:** a modalidade **padrão** quando o portal está configurado e o pedido é elegível é **link HTTPS externo em aba independente**, mesmo quando o cliente anuncia MCP Apps ou elicitation. O operador autentica-se diretamente na Central Pórtico; a IA consulta `permissions.approval_status` e retoma somente após o Broker confirmar o grant. O modo anterior de apresentação adaptativa pode ser ativado **explicitamente** com `PORTICO_APPROVAL_SURFACE=adaptive` para testes controlados, sujeito aos gates por cliente. A tabela abaixo descreve **esse modo opcional**, não a prioridade padrão. Pedidos não elegíveis ao portal continuam no fallback SSH. O instalador não foi alterado. A retomada automática pelo cliente não é universal: se o chat encerrar o turno, o usuário deve pedir “continue” e a IA consulta o status antes de agir.
+
+
 Estado: candidato para revisão, derivado da PR #88. Nenhuma implantação desta alteração foi realizada.
 Implementação e revisões na [PR #93](https://github.com/josemirmoura/mcp-vps-agent-gateway/pull/93).
 

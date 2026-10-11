@@ -8,7 +8,7 @@ const embedded=location.pathname==='/operator/embed';
 const api=embedded?'/operator/embed/api':'/operator/api';
 let csrf='',nonce='',stepUp=false,sessionCsrf='',loggingIn=false;
 let generation=0,deciding=false,loggingOut=false;
-function status(message){$('status').textContent=message}
+function status(message,tone='info'){const el=$('status');el.textContent=message;el.className='status status--'+(tone==='success'?'success':tone==='warning'?'warning':tone==='error'?'error':'info')}
 function notify(state){if(embedded&&window.parent!==window)window.parent.postMessage({type:'portico-operator',request_id:requestId,status:state},'*')}
 async function readJSON(response){if(!response.ok){const errors={401:'Sessão não autenticada. Entre na Central segura.',403:'Operador sem autorização ou verificação recusada.',404:'Pedido indisponível para este operador.',409:'Decisão expirada, repetida ou sessão alterada. Consulte o estado.',428:'Confirme novamente a identidade para esta operação.',503:'Broker temporariamente indisponível. Consulte o estado antes de repetir.'};throw Error(errors[response.status]||'Não foi possível confirmar a solicitação.')}return response.json()}
 async function load(afterLogin=false){
@@ -20,7 +20,10 @@ async function load(afterLogin=false){
   const data=await readJSON(await fetch(api+'/approvals/'+encodeURIComponent(requestId),{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}}));
   if(view!==generation)return;
   if(data.request_id!==requestId)throw Error('O Broker não confirmou o pedido solicitado.');
-  for(const k of ['request_id','node','subject','resource','access'])$(k).textContent=String(data[k]??'');
+  for(const k of ['request_id','node','subject','resource'])$(k).textContent=String(data[k]??'');
+  // Labels explain the capability without implying a narrower Broker grant.
+  const accessLabel={read:'Somente leitura (read)',work:'Trabalho: leitura, edição e exclusão se permitida (work)',compose:'Operações Compose autorizadas (compose)'};
+  $('access').textContent=accessLabel[data.access]||String(data.access??'');
   $('operator').textContent=String(data.operator??'');
   $('ttl').textContent=String(data.ttl_label??'');
   $('expires').textContent=data.expires_at?new Date(data.expires_at).toLocaleString('pt-BR'):'';
@@ -33,8 +36,8 @@ async function load(afterLogin=false){
   $('details').hidden=false;$('login-panel').hidden=true;
   const pending=data.status==='pending'&&!!csrf&&!!nonce;
   $('approve').disabled=!pending;$('deny').disabled=!pending;
-  const final={approved:'Autorização confirmada pelo Broker.',denied:'Solicitação negada. Nenhuma permissão concedida.',expired:'Pedido ou permissão expirou.',cancelled:'Pedido cancelado.',revoked:'Permissão revogada.'};
-  status(pending?'Confira a máquina, o solicitante, o recurso e o perfil antes de decidir.':(final[data.status]||'Pedido indisponível para decisão.'));
+  const final={approved:'Autorização confirmada pelo Broker. Volte à conversa; se a IA não retomar, escreva “continue”.',denied:'Solicitação negada. Nenhuma permissão concedida.',expired:'Pedido ou permissão expirou.',cancelled:'Pedido cancelado.',revoked:'Permissão revogada.'};
+  status(pending?'Confira a máquina, o solicitante, o recurso e o perfil antes de decidir.':(final[data.status]||'Pedido indisponível para decisão.'),pending?'info':data.status==='approved'?'success':data.status==='denied'?'warning':'error');
   notify(pending?'ready':data.status);
  }catch(e){if(view!==generation)return;status(e.message);$('details').hidden=true;$('login-panel').hidden=!e.message.includes('Sessão não autenticada')}
 }
@@ -56,7 +59,7 @@ async function decide(decision){
   if(view!==generation)return;
   if(result.request_id!==requestId||result.status!==(decision==='approve'?'approved':'denied'))throw Error('O Broker não confirmou a decisão.');
   csrf='';nonce='';$('login-panel').hidden=true;$('details').hidden=false;$('step-up-panel').hidden=true;
-  status(decision==='approve'?'Autorização aprovada com sucesso. Permissão concedida conforme prazo exibido.':'Solicitação negada com sucesso. Nenhuma permissão foi concedida.');
+  status(decision==='approve'?'Autorização aprovada com sucesso. Permissão concedida conforme prazo exibido. Volte ao chat; se necessário, escreva “continue”.':'Solicitação negada com sucesso. Nenhuma permissão foi concedida.',decision==='approve'?'success':'warning');
   notify(result.status);
   // Retain confirmed final state. No pending-only refetch may overwrite success.
  }catch(e){if(view===generation){csrf='';nonce='';status(e.message+' Use Consultar estado antes de tentar novamente.')}}finally{deciding=false;$('refresh').disabled=loggingOut}

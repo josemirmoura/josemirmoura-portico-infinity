@@ -1,30 +1,104 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#eef3fb">
 <title>Pórtico | Central de Autorizações</title>
 <link rel="stylesheet" href="/operator/style.css">
 </head>
-<body><main>
-<header><div><h1>🛡️ Pórtico</h1><small>Central de Autorizações</small></div><span class="badge">Community</span></header>
-<section class="card" id="login-panel" hidden><h2>Entrar como operador</h2><form id="login-form"><label for="password">Senha da Central</label><p><input id="password" type="password" autocomplete="current-password" required></p><button id="login" type="button">Entrar</button></form><p id="login-error" role="alert"></p></section><section class="card" aria-labelledby="heading"><h2 id="heading">Autorização do operador</h2>
-<p id="status" role="status" aria-live="polite">Verificando a sessão segura…</p>
-<div id="details" hidden>
-<dl>
-<dt>Solicitação</dt><dd id="request_id"></dd>
-<dt>Máquina</dt><dd id="node"></dd>
-<dt>Operador</dt><dd id="operator"></dd>
-<dt>Cliente MCP</dt><dd id="subject"></dd>
-<dt>Recurso</dt><dd id="resource"></dd>
-<dt>Permissão</dt><dd id="access"></dd>
-<dt>Duração</dt><dd id="ttl"></dd>
-<dt>Expira em</dt><dd id="expires"></dd>
-</dl>
-<div class="notice" id="warning" hidden>ATENÇÃO: esta autorização abrange todo o limite físico indicado, incluindo subpastas futuras.</div>
-<section id="step-up-panel" class="notice" hidden><label for="step-up-password">Confirme sua senha da Central para autorizar esta operação</label><p><input id="step-up-password" type="password" autocomplete="current-password"></p><small>A verificação vale apenas para este pedido.</small></section>
-<div class="actions"><button id="deny" class="deny" disabled>Negar</button><button id="approve" class="approve" disabled>Autorizar</button></div>
-</div></section>
-<p><button id="refresh">Consultar estado</button><button id="logout">Encerrar sessão</button></p>
-<p class="muted"><small>As autorizações são verificadas pelo Broker local. Abrir esta página ou receber uma confirmação do ChatGPT não concede acesso.</small></p>
+<body>
+<main class="page">
+  <header class="site-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">P</span>
+      <div class="brand-text">
+        <h1>Pórtico</h1>
+        <span>Central de Autorizações</span>
+      </div>
+    </div>
+    <span class="badge">Community</span>
+  </header>
+
+  <div class="page-heading">
+    <p class="eyebrow">Controle de acesso</p>
+    <h2>Você decide o que a IA pode acessar.</h2>
+    <p class="lead">Confira o pedido antes de liberar qualquer pasta. A decisão é aplicada diretamente pelo Broker do Pórtico.</p>
+  </div>
+
+  <section class="card login-card" id="login-panel" aria-labelledby="login-title" hidden>
+    <div class="card-header">
+      <span class="step-label">IDENTIFICAÇÃO DO OPERADOR</span>
+      <h2 id="login-title">Acesse sua Central</h2>
+      <p>Use a senha do Pórtico. Não informe credenciais na conversa com a IA.</p>
+    </div>
+    <form id="login-form">
+      <label for="password">Senha da Central</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button id="login" class="approve" type="button">Entrar com segurança</button>
+    </form>
+    <p id="login-error" class="form-error" role="alert"></p>
+  </section>
+
+  <section class="card approval-card" aria-labelledby="heading">
+    <div class="card-header">
+      <span class="step-label">SOLICITAÇÃO DE ACESSO</span>
+      <h2 id="heading">Revisar autorização</h2>
+      <p>Uma IA solicitou acesso à sua máquina. Leia os detalhes e escolha abaixo.</p>
+    </div>
+
+    <p id="status" class="status" role="status" aria-live="polite">Verificando a sessão segura…</p>
+
+    <div id="details" hidden>
+      <section class="scope-panel" aria-label="Pasta e permissão solicitadas">
+        <div class="scope-header">
+          <span class="scope-icon" aria-hidden="true">/</span>
+          <span class="scope-label">PASTA SOLICITADA</span>
+        </div>
+        <p id="resource" class="resource-value"></p>
+        <dl class="scope-grid">
+          <div><dt>Tipo de acesso</dt><dd id="access"></dd></div>
+          <div><dt>Duração</dt><dd id="ttl"></dd></div>
+        </dl>
+      </section>
+
+      <h3 class="section-heading">Detalhes da solicitação</h3>
+      <dl class="metadata-grid">
+        <div><dt>Máquina</dt><dd id="node"></dd></div>
+        <div><dt>IA / cliente MCP</dt><dd id="subject"></dd></div>
+        <div><dt>Operador</dt><dd id="operator"></dd></div>
+        <div><dt>Pedido</dt><dd id="request_id"></dd></div>
+        <div class="meta-wide"><dt>Expira em</dt><dd id="expires"></dd></div>
+      </dl>
+
+      <div class="notice" id="warning" role="note" hidden>
+        <strong>Atenção: acesso amplo.</strong> Esta autorização abrange todo o limite físico indicado, incluindo subpastas futuras.
+      </div>
+
+      <section id="step-up-panel" class="step-up-panel" aria-label="Verificação adicional" hidden>
+        <h3>Confirme a operação</h3>
+        <label for="step-up-password">Digite novamente a senha da Central para autorizar este acesso.</label>
+        <input id="step-up-password" type="password" autocomplete="current-password">
+        <small>A verificação adicional vale somente para este pedido.</small>
+      </section>
+
+      <div class="actions" aria-label="Decisão do operador">
+        <button id="deny" class="deny" type="button" disabled>Negar acesso</button>
+        <button id="approve" class="approve" type="button" disabled>Autorizar acesso</button>
+      </div>
+    </div>
+  </section>
+
+  <nav class="secondary-actions" aria-label="Opções da Central">
+    <button id="refresh" type="button">Consultar estado</button>
+    <button id="logout" type="button">Encerrar sessão</button>
+  </nav>
+
+  <footer class="site-footer">
+    <span aria-hidden="true" class="footer-lock">●</span>
+    <p>Somente uma decisão do operador autenticado pode conceder acesso. Abrir este link ou confirmar uma ação no ChatGPT não autoriza a VPS.</p>
+  </footer>
 </main>
-<script src="/operator/app.js" defer></script></body></html>
+<script src="/operator/app.js" defer></script>
+</body>
+</html>
