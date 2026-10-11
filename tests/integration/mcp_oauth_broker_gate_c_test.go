@@ -144,9 +144,9 @@ func TestGateCOAuthStatelessRealBrokerFailClosed(t *testing.T) {
 		if token=="wrong-scope" {
 			challenge:=resp.Header.Get("WWW-Authenticate")
 			if !strings.Contains(challenge,"Bearer") ||
-				!strings.Contains(challenge,"insufficient_scope") ||
+				!strings.Contains(challenge,"scope=") ||
 				!strings.Contains(challenge,"portico.read") {
-				t.Fatalf("insufficient OAuth scope missing safe, actionable Bearer challenge")
+				t.Fatalf("insufficient OAuth scope must return a Bearer scope challenge")
 			}
 		}
 		if resp.StatusCode!=http.StatusOK {
