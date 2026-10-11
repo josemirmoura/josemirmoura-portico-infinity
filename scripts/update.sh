@@ -111,6 +111,35 @@ if ! python3 scripts/verify-update-publication.py \
 fi
 
 # Even a no-op update must not report an incomplete/unsigned tag as accepted.
+# BEGIN UPDATE PROJECT OWNERSHIP GUARD
+# This updater snapshots and restores fixed mcp-vps-agent identity volumes.
+# It must never operate on another Compose project or from an unrelated clone.
+# The Broker must already be running from this exact physical checkout.
+if [ "${COMPOSE_PROJECT_NAME:-mcp-vps-agent}" != "mcp-vps-agent" ]; then
+  echo "UPDATE BLOCKED: this updater supports only the canonical mcp-vps-agent Compose project." >&2
+  exit 1
+fi
+broker_container_id="$("${compose[@]}" ps -q broker)" || {
+  echo "UPDATE BLOCKED: could not identify the running Compose Broker." >&2
+  exit 1
+}
+if [[ ! "$broker_container_id" =~ ^[0-9a-f]{12,64}$ ]]; then
+  echo "UPDATE BLOCKED: expected exactly one running Compose Broker container." >&2
+  exit 1
+fi
+owner_checkout="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$broker_container_id")" || {
+  echo "UPDATE BLOCKED: could not verify Broker project ownership." >&2
+  exit 1
+}
+owner_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$broker_container_id")" || {
+  echo "UPDATE BLOCKED: could not verify Broker project label." >&2
+  exit 1
+}
+if [ "$owner_checkout" != "$(pwd -P)" ] || [ "$owner_project" != "mcp-vps-agent" ]; then
+  echo "UPDATE BLOCKED: running Broker belongs to a different Docker project or checkout." >&2
+  exit 1
+fi
+# END UPDATE PROJECT OWNERSHIP GUARD
 if [ "$current" = "$target_sha" ]; then
   echo "$(vps_agent_text 'Already at target version.' 'Já está na versão alvo.')"
   exit 0
