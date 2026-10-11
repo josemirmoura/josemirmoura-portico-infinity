@@ -12,7 +12,7 @@ from pathlib import Path
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 PROTOCOL = "2026-07-28"
 MAX_RESPONSE = 1024 * 1024
@@ -24,6 +24,11 @@ META = {
 
 class ProfileFailure(RuntimeError):
     pass
+
+class DenyRedirect(HTTPRedirectHandler):
+    """Never follow a disposable target's Location into another network origin."""
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
 
 def loopback_endpoint(url: str) -> None:
     parsed = urlsplit(url)
@@ -52,13 +57,17 @@ def rpc(url: str, method: str, params: dict, request_id: int, *, origin: str | N
         headers["Origin"] = origin
     request = Request(url, data=body, headers=headers, method="POST")
     try:
-        response = urlopen(request, timeout=8)
+        # Avoid inherited HTTP(S)_PROXY and automatic redirects. A local
+        # Gateway must not be able to make this verifier contact another host.
+        response = build_opener(ProxyHandler({}), DenyRedirect()).open(request, timeout=8)
     except HTTPError as exc:
         response = exc
     except (URLError, TimeoutError, OSError) as exc:
         raise ProfileFailure("Gateway request failed on localhost") from exc
     with response:
         status = response.status
+        if 300 <= status < 400:
+            raise ProfileFailure("Gateway returned a redirect; cross-host follow-up forbidden")
         if status == 403:
             return status, None
         raw = response.read(MAX_RESPONSE + 1)
