@@ -68,7 +68,7 @@ func guardMCPJSONRPCShape(next http.Handler) http.Handler {
 
 // MCP 2026-07-28 request IDs must be strings or numbers, never null/bool/object.
 func validMCPRequestID(value json.RawMessage) bool {
-    if len(value)==0 {return false}
+    if len(value)==0 || bytes.Equal(value,[]byte("null")) {return false}
     var s string
     if json.Unmarshal(value,&s)==nil {return true}
     var n json.Number
