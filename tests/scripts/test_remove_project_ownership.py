@@ -44,15 +44,15 @@ docker() {
     return 0
   fi
   if [ "$1" = volume ] && [ "$2" = ls ]; then
-    printf '%s\\n' "$MOCK_VOLUMES"
+    printf '%s\n' "$MOCK_VOLUMES"
     return 0
   fi
   if [ "$1" = network ] && [ "$2" = ls ]; then
-    printf '%s\\n' "$MOCK_NETWORKS"
+    printf '%s\n' "$MOCK_NETWORKS"
     return 0
   fi
   if [ "$1" = image ] && [ "$2" = ls ]; then
-    printf '%s\\n' "$MOCK_IMAGES"
+    printf '%s\n' "$MOCK_IMAGES"
     return 0
   fi
   if [ "$1" = inspect ]; then
