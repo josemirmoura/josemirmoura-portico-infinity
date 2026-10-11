@@ -172,7 +172,7 @@ func (s *Server) presentApproval(ctx context.Context, req *mcp.CallToolRequest, 
 		out["operator_approval_url"] = link
 		out["approval_method"] = "operator_web"
 		out["approval_channel"] = "https"
-		out["message"] = "Pedido pendente. Abra o link HTTPS em outra aba, confirme ou negue como operador autenticado. Em seguida, consulte permissions.approval_status para continuar somente se o Broker confirmar acesso."
+		out["message"] = "Pedido pendente. Abra em outra aba: " + link + " . Confirme ou negue como operador autenticado. Depois consulte permissions.approval_status para continuar somente se o Broker confirmar acesso."
 	}
 	// The operator-approved HTTPS link is the primary Community UX even if
 	// the host advertises MCP Apps or elicitation. Host-owned modals differ by
