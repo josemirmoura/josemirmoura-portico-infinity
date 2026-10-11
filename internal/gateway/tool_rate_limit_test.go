@@ -10,6 +10,7 @@ import (
     "time"
 
     "github.com/josemirmoura/mcp-vps-agent-gateway/internal/securefs"
+    "golang.org/x/time/rate"
 )
 
 func TestGateCA4SubjectRateBurstRecoveryAndIsolation(t *testing.T) {
@@ -27,6 +28,8 @@ func TestGateCA4SubjectRateBurstRecoveryAndIsolation(t *testing.T) {
 
 func TestGateCA4BoundedPrincipalMemoryAndFailClosed(t *testing.T) {
     limiter:=newToolInvocationLimiter(1,1)
+    // Independently exercise the subject-table bound, not the global budget.
+    limiter.global=rate.NewLimiter(rate.Inf,globalToolBurst)
     clock:=time.Now()
     limiter.now=func()time.Time{return clock}
     for i:=0;i<maxToolSubjects;i++ {
