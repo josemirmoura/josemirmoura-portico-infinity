@@ -234,6 +234,8 @@ for (const profile of profiles) {
   test(profile.name + ': explicit read decisions reuse an authenticated session', { timeout: 30_000 }, () => run(profile, 'portal-session', async ({ page, context }) => {
     await page.goto(metadata.operator + '/operator?request=' + metadata.read);
     await login(page); await pending(page); await noHorizontalOverflow(page);
+    // Synthetic visual acceptance: capture enabled controls before the decision.
+    await page.screenshot({ path: path.join(artifacts, profile.name + '-portal-pending.png'), fullPage: true });
     assert.equal(await page.locator('#step-up-panel').isVisible(), false);
     assert.equal((await state(context)).decisions.length, 0);
     await page.locator('#approve').click(); await final(page, 'approve');
@@ -275,6 +277,7 @@ for (const profile of profiles) {
     await page.goto(metadata.operator + '/operator?request=' + metadata.critical);
     await login(page); await pending(page);
     await page.locator('#step-up-panel').waitFor({ state: 'visible' });
+    await page.screenshot({ path: path.join(artifacts, profile.name + '-step-up-pending.png'), fullPage: true });
     await page.locator('#step-up-password').fill('wrong-synthetic-passphrase');
     await page.locator('#approve').click();
     await page.locator('#status').filter({ hasText: 'Operador sem autorização ou verificação recusada' }).waitFor();
