@@ -110,9 +110,9 @@
       "family": "transport",
       "rule": "Cancellation propagation and no further SSE events",
       "applicability": "MUST_CONDITIONAL",
-      "status": "NOT_PROVEN",
-      "evidence": "internal/gateway/gateway.go",
-      "limitation": "Handler propagates request cancellation; no end-to-end cancellation under real effects proven"
+      "status": "PARTIAL",
+      "evidence": "internal/gateway/mcp_gate_c_cancellation_test.go",
+      "limitation": "Actual Streamable HTTP Handler passes client request-context cancellation to in-flight Executor, with no privileged Broker effects. SSE-stream close not applicable to JSONResponse profile; cancellation of a remote Broker side effect under timeout requires separate proof."
     },
     {
       "id": "C13",
