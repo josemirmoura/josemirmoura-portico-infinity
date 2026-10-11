@@ -52,7 +52,13 @@ func approvalCapabilities(caps *mcp.ClientCapabilities) approvalClientSupport {
 	return out
 }
 
-func appEnabled() bool { return os.Getenv("VPS_AGENT_MCP_APPS") == "1" }
+// External HTTPS approvals are the Community default. Embedded/native
+// presentation must be opted into explicitly for controlled compatibility tests.
+func adaptiveApprovalEnabled() bool { return os.Getenv("PORTICO_APPROVAL_SURFACE") == "adaptive" }
+
+func appEnabled() bool {
+	return adaptiveApprovalEnabled() && os.Getenv("VPS_AGENT_MCP_APPS") == "1"
+}
 
 func approvalTool(name, description string) *mcp.Tool {
 	t := annotatedTool(name, description)
@@ -166,7 +172,13 @@ func (s *Server) presentApproval(ctx context.Context, req *mcp.CallToolRequest, 
 		out["operator_approval_url"] = link
 		out["approval_method"] = "operator_web"
 		out["approval_channel"] = "https"
-		out["message"] = "Confira o pedido na Central HTTPS e confirme ou negue como operador autenticado."
+		out["message"] = "Pedido pendente. Abra o link HTTPS em outra aba, confirme ou negue como operador autenticado. Em seguida, consulte permissions.approval_status para continuar somente se o Broker confirmar acesso."
+	}
+	// The operator-approved HTTPS link is the primary Community UX even if
+	// the host advertises MCP Apps or elicitation. Host-owned modals differ by
+	// client and must never replace the independent Broker operator decision.
+	if !adaptiveApprovalEnabled() {
+		return nil, out, nil
 	}
 	if support.Apps && appEnabled() && link != "" {
 		out["approval_method"] = "mcp_apps"
