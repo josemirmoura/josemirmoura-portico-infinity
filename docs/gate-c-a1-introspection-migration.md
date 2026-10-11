@@ -9,6 +9,14 @@
 - Default new integrated-auth bootstrap now configures `https://${VPS_AGENT_DOMAIN}/oauth/v2/introspect` via the existing Traefik trusted public TLS listener, not direct Docker h2c `http://zitadel-auth-internal:8080`.
 - Independent A1 307/302 redirects and self-signed TLS invalidity have fail-closed regression tests.
 
+## One-time legacy configuration preparation helper (reviewed, NOT deployed)
+
+The candidate includes `scripts/prepare-https-introspection.sh`. Its default `--check` mode performs **no mutation**, using a disposable Gateway container on the installation's real Compose networks to confirm certificate-verified, proxy-free HTTPS introspection with a deliberately invalid token (must yield `active:false`). It refuses custom endpoints, missing secrets, symlinked `.env`, invalid domains and failed TLS/routing.
+
+Its explicit `--apply` mode, after successful independent preflight, saves a private mode-600 snapshot of `.env` under a mode-700 backups directory and atomically updates ONLY `VPS_AGENT_INTEGRATED_INTROSPECTION_URL`. It **does not restart services** or touch identity volumes or Broker state. Historical Gateway binaries support HTTPS, so a rollback to the old application after this configuration update need not downgrade the introspection transport.
+
+A signed package and review of the actual old-version-to-new-version updater are still required before any operator uses this helper. This script is intended to automate the one-time migration decision, but its presence in a Git branch is not evidence of a successful live migration. Its unit tests use a fake Docker command: they verify fail-closed behavior and atomic source configuration changes, **not** real Traefik/DNS/certificate connectivity.
+
 ## Deployment migration and operator acceptance STILL REQUIRED
 
 **Do not deploy this branch as-is to an installation whose `.env` still contains the legacy internal HTTP introspection URL.** The new Gateway deliberately rejects that config at startup, preventing silent insecure operation. Existing updates `scripts/update.sh` restore saved `.env` and do not automatically rewrite credentials or configuration, correctly refusing unsafe rollbacks.
