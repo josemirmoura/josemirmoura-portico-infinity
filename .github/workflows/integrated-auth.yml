@@ -356,7 +356,9 @@ jobs:
               trusted.open(request(token, client_secret_override="invalid-client-secret"), timeout=8)
               raise AssertionError("wrong introspection credentials were accepted")
           except urllib.error.HTTPError as exc:
-              assert exc.code == 401, exc.code
+              # ZITADEL v4 may return OAuth invalid_client as HTTP 400,
+              # unlike the synthetic IDP's 401. Either must fail closed.
+              assert exc.code in (400, 401), exc.code
 
           try:
               opener(ssl.create_default_context()).open(request(token), timeout=8)
