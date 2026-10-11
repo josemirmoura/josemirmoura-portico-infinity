@@ -29,6 +29,7 @@ func TestGateCRealHTTPMalformedJSONRPCNeverReachesExecutor(t *testing.T) {
         {"invalid-arguments-type", `{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"system.info","arguments":"not-object",`+metadata+"}}"},
         {"null-id", `{"jsonrpc":"2.0","id":null,"method":"tools/call",`+goodParams+"}"},
         {"boolean-id", `{"jsonrpc":"2.0","id":true,"method":"tools/call",`+goodParams+"}"},
+        {"fractional-number-id", `{"jsonrpc":"2.0","id":1.5,"method":"tools/call",`+goodParams+"}"},
         {"object-id", `{"jsonrpc":"2.0","id":{},"method":"tools/call",`+goodParams+"}"},
         {"invalid-tool-name-type", `{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":true,"arguments":{},`+metadata+"}}"},
     }
