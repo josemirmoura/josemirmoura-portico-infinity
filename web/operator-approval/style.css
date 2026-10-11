@@ -121,7 +121,8 @@ button:disabled{opacity:.54;cursor:not-allowed;box-shadow:none}
   .page-heading{margin-bottom:20px}
   .card{border-radius:15px;padding:18px 16px}
   .scope-panel{padding:15px}
-  .scope-grid{gap:10px}
+  .scope-grid{grid-template-columns:1fr;gap:12px}
+  .scope-grid>div+div{border-top:1px solid #ceddf8;padding-top:11px}
   .metadata-grid{grid-template-columns:1fr;gap:9px}
   .metadata-grid>div{padding-top:10px}
   .actions{grid-template-columns:1fr;gap:10px;margin-top:22px}
