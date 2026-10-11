@@ -297,6 +297,7 @@ jobs:
           # File-provider only. No Docker API, privileged container, host ports,
           # host networking or access to the operator's real DNS/certificates.
           docker run --detach --rm --name portico-ci-zitadel-tls \
+            --user "$(id -u):$(id -g)" \
             --network ci-edge --network-alias mcp.example.invalid \
             --cap-drop ALL --cap-add NET_BIND_SERVICE \
             --security-opt no-new-privileges:true \
@@ -372,6 +373,7 @@ jobs:
           print("GATE_C_REAL_ZITADEL_TRUSTED_HTTPS_OK")
           PY
           docker run --rm --network ci-edge \
+            --user "$(id -u):$(id -g)" \
             --cap-drop ALL --security-opt no-new-privileges:true \
             --mount "type=bind,src=$lab,dst=/pki,readonly" \
             python:3.12-slim-bookworm python3 /pki/probe.py
