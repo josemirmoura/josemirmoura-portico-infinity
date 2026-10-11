@@ -663,7 +663,10 @@ PY
 fi
 
 AUDIENCE_SCOPE="urn:zitadel:iam:org:project:id:$RESOURCE_PROJECT_ID:aud"
-upsert_env VPS_AGENT_INTEGRATED_INTROSPECTION_URL "http://zitadel-auth-internal:8080/oauth/v2/introspect"
+# The Gateway must reach the issuer via certificate-verified HTTPS.
+# Docker's unencrypted internal h2c API is NOT a secure RFC 7662 backchannel.
+# Traefik already serves this path with a trusted TLS certificate.
+upsert_env VPS_AGENT_INTEGRATED_INTROSPECTION_URL "https://${DOMAIN}/oauth/v2/introspect"
 upsert_env VPS_AGENT_INTEGRATED_INTROSPECTION_HOST "$DOMAIN"
 upsert_env VPS_AGENT_INTEGRATED_AUDIENCE_PROJECT_ID "$RESOURCE_PROJECT_ID"
 upsert_env VPS_AGENT_REQUIRED_SCOPES "openid $AUDIENCE_SCOPE"
