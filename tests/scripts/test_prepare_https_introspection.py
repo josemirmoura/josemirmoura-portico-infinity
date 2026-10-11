@@ -79,6 +79,45 @@ printf '%s\\n' '{"active":false}'
         self.assertNotEqual(run.returncode,0)
         self.assertEqual(self.env.read_bytes(),state)
 
+    def test_migration_roundtrip_backup_restore_in_disposable_directory(self):
+        original=self.env.read_bytes()
+        applied=self.run_helper("--apply")
+        self.assertEqual(applied.returncode,0,applied.stderr)
+        migrated=self.env.read_bytes()
+        self.assertNotEqual(original,migrated)
+        self.assertIn(TARGET,self.env.read_text())
+        checked=self.run_helper("--check")
+        self.assertEqual(checked.returncode,0,checked.stderr)
+        self.assertEqual(self.env.read_bytes(),migrated)
+        backups=list((self.root/"backups").glob("https-introspection.*/previous.env"))
+        self.assertEqual(len(backups),1)
+        self.assertEqual(backups[0].read_bytes(),original)
+        # Rehearse operator-controlled restore, without any real Docker/VPS.
+        shutil.copyfile(backups[0],self.env)
+        self.env.chmod(0o600)
+        self.assertEqual(self.env.read_bytes(),original)
+        self.assertEqual(self.env.stat().st_mode & 0o777,0o600)
+
+    def test_preflight_observes_well_formed_inactive_token_response(self):
+        before=self.env.read_bytes()
+        docker=self.root/"bin/docker"
+        docker.write_text("""#!/bin/sh
+printf '%s\\n' '{"active":true}'
+""")
+        docker.chmod(0o700)
+        result=self.run_helper("--apply")
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(self.env.read_bytes(),before)
+        self.assertFalse((self.root/"backups").exists())
+
+    def test_unknown_config_not_overwritten_and_secrets_not_reported(self):
+        original=self.env.read_text()
+        self.env.write_text(original.replace(LEGACY,"https://unknown.example.invalid/introspect"))
+        result=self.run_helper("--apply")
+        self.assertNotEqual(result.returncode,0)
+        self.assertNotIn("disposable-secret",result.stdout+result.stderr)
+        self.assertFalse((self.root/"backups").exists())
+
     def test_symlinked_env_rejected_without_mutation(self):
         path=self.root/"real.env"
         self.env.rename(path)
