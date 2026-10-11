@@ -129,10 +129,27 @@ async function login(scope, method = 'click') {
 async function pending(scope) {
   await scope.locator('#approve:not([disabled])').waitFor();
   await scope.locator('#deny:not([disabled])').waitFor();
+  // Regression for the blank/unusable approval button observed by the owner:
+  // both actions must have a readable label and touch-sized hit target.
+  for (const [id, label] of [['approve', 'Autorizar acesso'], ['deny', 'Negar acesso']]) {
+    const button = scope.locator('#' + id);
+    assert.equal((await button.textContent()).trim(), label);
+    const ui = await button.evaluate(el => {
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return { height: rect.height, width: rect.width, visibility: style.visibility,
+               display: style.display, color: style.color, background: style.backgroundColor };
+    });
+    assert.ok(ui.width >= 88 && ui.height >= 44, id + ' is not touch-sized: ' + JSON.stringify(ui));
+    assert.equal(ui.visibility, 'visible');
+    assert.notEqual(ui.display, 'none');
+    assert.notEqual(ui.color, ui.background, id + ' label is invisible against button background');
+  }
 }
 
 async function final(scope, decision) {
   await scope.locator('#status').filter({ hasText: decision === 'approve' ? 'Autorização aprovada com sucesso' : 'Solicitação negada com sucesso' }).waitFor();
+  assert.equal(await scope.locator('#status').evaluate(el => el.classList.contains(decision === 'approve' ? 'status--success' : 'status--warning')), true);
   assert.equal(await scope.locator('#approve').isDisabled(), true);
   assert.equal(await scope.locator('#deny').isDisabled(), true);
   assert.equal(await scope.locator('#login-panel').isVisible(), false);
