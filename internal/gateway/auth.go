@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -108,8 +109,19 @@ func NewIntegratedOIDCVerifier(introspectionURL, forwardedHost, clientID, client
 		return nil, errors.New("integrated introspection URL is required")
 	}
 	u, err := url.Parse(introspectionURL)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return nil, errors.New("integrated introspection URL must be http(s)")
+	if err != nil || u == nil || u.Host == "" || u.User != nil ||
+		u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" ||
+		(u.Scheme != "http" && u.Scheme != "https") {
+		return nil, errors.New("integrated introspection URL must be an HTTPS endpoint without credentials, query or fragment")
+	}
+	// In production every OAuth introspection hop must use certificate-verified
+	// HTTPS. A numeric loopback-only HTTP exception supports disposable Go
+	// httptest fixtures and cannot resolve to a Docker or public service.
+	if u.Scheme != "https" {
+		ip := net.ParseIP(u.Hostname())
+		if ip == nil || !ip.IsLoopback() {
+			return nil, errors.New("integrated introspection requires HTTPS for non-loopback endpoints")
+		}
 	}
 	if clientID == "" || clientSecret == "" {
 		return nil, errors.New("integrated introspection client credentials are required")
@@ -122,7 +134,18 @@ func NewIntegratedOIDCVerifier(introspectionURL, forwardedHost, clientID, client
 		return nil, errors.New("integrated expected audience is required")
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	// No ambient HTTP_PROXY/HTTPS_PROXY and no cross-origin redirect of either
+	// Bearer access tokens or introspection client Basic credentials. The
+	// default transport still verifies HTTPS server certificates and hostnames.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	client := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	return func(ctx context.Context, raw string, _ *http.Request) (*mcpauth.TokenInfo, error) {
 		if strings.TrimSpace(raw) == "" {
 			return nil, mcpauth.ErrInvalidToken

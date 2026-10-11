@@ -125,7 +125,7 @@ PY
 echo
 echo "$(vps_agent_text 'Checking private audience-bound token introspection...' 'Verificando a introspecção privada de token vinculada à audiência...')"
 docker compose exec -T gateway sh -c '
-  curl --fail --silent --show-error     --request POST     --url "$VPS_AGENT_INTEGRATED_INTROSPECTION_URL"     --user "$VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_ID:$VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_SECRET"     --header "Host: $VPS_AGENT_INTEGRATED_INTROSPECTION_HOST"     --header "X-Forwarded-Proto: https"     --header "Content-Type: application/x-www-form-urlencoded"     --data "token=deliberately-invalid-verification-probe"
+  curl --fail --silent --show-error --noproxy "*" --proto "=https" --max-redirs 0 --max-time 10     --request POST     --url "$VPS_AGENT_INTEGRATED_INTROSPECTION_URL"     --user "$VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_ID:$VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_SECRET"     --header "Content-Type: application/x-www-form-urlencoded"     --data "token=deliberately-invalid-verification-probe"
 ' >"$VERIFY_DIR/vps-agent-introspection-probe.json"
 VPS_AGENT_LANG="$VPS_AGENT_LANG" python3 - <<'PY'
 import json, os
