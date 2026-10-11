@@ -119,12 +119,9 @@ func TestCommunityExternalHTTPSIsDefaultEvenWithNativeClientCapabilities(t *test
 			t.Fatalf("missing %q from default external approval output: %s", want, raw)
 		}
 	}
-	for _, forbidden := range []string{"approval_token", "mcp_apps", "operator_navigation"} {
-		if forbidden == "mcp_apps" { // client_capabilities reports support, not chosen method
-			continue
-		}
+	for _, forbidden := range []string{"approval_token", "\"approval_method\":\"mcp_apps\"", "operator_navigation"} {
 		if strings.Contains(string(raw), forbidden) {
-			t.Fatalf("unsafe or wrong channel %q in output: %s", forbidden, raw)
+			t.Fatalf("unsafe or wrong approval channel %q in output: %s", forbidden, raw)
 		}
 	}
 }
