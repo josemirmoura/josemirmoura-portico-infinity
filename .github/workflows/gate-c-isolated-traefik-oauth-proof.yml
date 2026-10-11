@@ -1,0 +1,67 @@
+name: gate-c-isolated-traefik-oauth-proof
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/gate-c-isolated-traefik-oauth-proof.yml"
+      - "tests/fixtures/gate-c-target-topology/**"
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  disposable-traefik-oauth:
+    name: In-network trusted TLS and OAuth introspection, synthetic only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate isolated Docker Compose boundaries
+        working-directory: tests/fixtures/gate-c-target-topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose config --quiet
+          python3 - <<'PY'
+          import json,os,pathlib,subprocess
+          cfg=json.loads(subprocess.check_output(["docker","compose","config","--format","json"],text=True))
+          network=cfg["networks"]["laboratory"]
+          assert network["internal"] is True, "network must be isolated from host/external networks"
+          root=pathlib.Path.cwd().resolve()
+          for name,service in cfg["services"].items():
+              assert not service.get("privileged"), name
+              assert not service.get("ports"), "no published host ports: "+name
+              assert service.get("network_mode")!="host", name
+              assert service.get("pid")!="host", name
+              assert not service.get("devices"), name
+              assert not service.get("container_name"), name
+              assert service.get("restart","no")=="no", name
+              for mount in service.get("volumes",[]):
+                  if mount.get("type")=="bind":
+                      target=pathlib.Path(mount["source"]).resolve()
+                      assert root==target or root in target.parents, f"bind escapes lab root: {target}"
+                  assert "/var/run/docker.sock" not in str(mount), name
+          for key,vol in cfg.get("volumes",{}).items():
+              assert not vol.get("external"), key
+          print("PASS: no host ports, prod mounts, docker socket, host network, external volumes or privileged containers")
+          PY
+      - name: Run real Traefik + synthetic OAuth inside disposable Docker network
+        working-directory: tests/fixtures/gate-c-target-topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'docker compose down -v --remove-orphans >/dev/null 2>&1 || true' EXIT
+          docker compose pull --quiet
+          docker compose up -d --no-build lab-https-probe
+          id="$(docker compose ps -a -q lab-https-probe)"
+          test -n "$id"
+          status=""
+          for i in $(seq 1 65); do
+            status="$(docker inspect --format '{{.State.Status}}' "$id")"
+            if [ "$status" = "exited" ]; then break; fi
+            if [ "$status" = "dead" ]; then break; fi
+            sleep 2
+          done
+          docker compose logs --no-color --tail 120 lab-https-probe
+          code="$(docker inspect --format '{{.State.ExitCode}}' "$id")"
+          test "$status" = "exited" && test "$code" = 0
+          docker compose logs --no-color lab-https-probe | grep -q 'LAB_GATE_C_TRAEFIK_OAUTH_TLS_OK'
+          echo "GATE C LAB: trusted TLS, hostname, invalid credentials, fail-closed CA verified (synthetic only)"
