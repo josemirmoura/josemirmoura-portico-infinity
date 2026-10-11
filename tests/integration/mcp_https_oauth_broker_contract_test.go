@@ -150,8 +150,10 @@ func TestGateCVerifiedHTTPSIntrospectionToBroker(t *testing.T) {
 		if code, _, _ := request("wrong-aud",allowed,""); code != 401 {
 			t.Fatalf("wrong-audience bearer bypassed resource protection: HTTP %d",code)
 		}
-		if code, _, _ := request("wrong-scope",allowed,""); code != 401 && code != 403 {
-			t.Fatalf("insufficient scope returned HTTP %d",code)
+		if code, _, hdr := request("wrong-scope",allowed,""); code != http.StatusForbidden ||
+			!strings.Contains(hdr.Get("WWW-Authenticate"),"insufficient_scope") ||
+			!strings.Contains(hdr.Get("WWW-Authenticate"),"portico.read") {
+			t.Fatalf("valid bearer with insufficient scope must return 403 and a Bearer step-up challenge; HTTP %d",code)
 		}
 		if code, _, _ := request("valid",allowed,"https://evil.invalid"); code != 403 {
 			t.Fatalf("hostile Origin reached authenticated endpoint: HTTP %d",code)
