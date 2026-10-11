@@ -27,6 +27,14 @@ class HTTPSMigrationTests(unittest.TestCase):
         docker=self.root/"bin/docker"
         docker.write_text("""#!/bin/sh
 if [ "$PORTICO_FAKE_DOCKER_MODE" = "fail" ]; then exit 23; fi
+# The only container command accepted by this mock must use stdin curl config.
+case "$*" in
+  *"--user "*|*"disposable-secret"*) exit 48 ;;
+esac
+case "$*" in
+  *"--config -"*) ;;
+  *) exit 49 ;;
+esac
 printf '%s\\n' '{"active":false}'
 """)
         docker.chmod(0o700)
@@ -45,6 +53,14 @@ printf '%s\\n' '{"active":false}'
             "PORTICO_FAKE_DOCKER_MODE":fake}
         return subprocess.run(["bash",str(self.root/"scripts/prepare-https-introspection.sh"),mode],
                               cwd=self.root,env=env,capture_output=True,text=True,timeout=25)
+
+    def test_probe_does_not_expose_credentials_in_process_arguments(self):
+        source=SOURCE.read_text()
+        self.assertIn("curl -q --config -",source)
+        self.assertNotIn("--user ",source)
+        run=self.run_helper("--check")
+        self.assertEqual(run.returncode,0,run.stderr)
+        self.assertNotIn("disposable-secret",run.stdout+run.stderr)
 
     def test_default_dry_run_is_read_only(self):
         before=self.env.read_bytes()
