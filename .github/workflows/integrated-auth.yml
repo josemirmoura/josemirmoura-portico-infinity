@@ -255,7 +255,7 @@ jobs:
           set -euo pipefail
           lab="$(mktemp -d /tmp/portico-zitadel-https.XXXXXXXX)"
           chmod 700 "$lab"
-          trap 'docker rm -f portico-ci-real-gateway portico-ci-zitadel-tls >/dev/null 2>&1 || true; rm -rf -- "$lab"' EXIT
+          trap 'COMPOSE_PROJECT_NAME=portico-gate-c-migration docker compose -f "$lab/migrate/compose.yaml" -f "$lab/migrate/compose.integrated-auth.yaml" --project-directory "$lab/migrate" down -v --remove-orphans >/dev/null 2>&1 || true; docker rm -f portico-ci-real-gateway portico-ci-zitadel-tls >/dev/null 2>&1 || true; rm -rf -- "$lab"' EXIT
 
           # No host-published ports, Docker socket, operator credentials or external
           # mounts. Reuse only the already disposable ZITADEL/Postgres CI network.
@@ -473,6 +473,80 @@ jobs:
             python:3.12-slim-bookworm python3 /pki/gateway-probe.py
           docker rm -f portico-ci-real-gateway >/dev/null
           echo "Real distributed Gateway + real ZITADEL introspection via trusted HTTPS: PASS (local nonprivileged executor; Broker proof separate)"
+
+          # Migrator against the same real in-network ZITADEL HTTPS endpoint.
+          # Only an isolated copied Compose project is used; never the original
+          # project's identity volumes, Broker or update script on the VPS.
+          mkdir -p "$lab/cert-image" "$lab/migrate/scripts" "$lab/migrate/config" "$lab/migrate/state"
+          cp "$lab/ca.pem" "$lab/cert-image/ca.pem"
+          chmod 644 "$lab/cert-image/ca.pem"
+          cat > "$lab/cert-image/Dockerfile" <<'DOCKER'
+          FROM portico-gate-c-real-gateway:disposable
+          USER root
+          COPY ca.pem /usr/local/share/ca-certificates/portico-gate-c.crt
+          RUN update-ca-certificates
+          USER 65532:65532
+          DOCKER
+          docker build --quiet -t portico-gate-c-trusted-gateway:disposable "$lab/cert-image" >/dev/null
+          cp compose.yaml compose.integrated-auth.yaml "$lab/migrate/"
+          cp scripts/prepare-https-introspection.sh "$lab/migrate/scripts/"
+          chmod 700 "$lab/migrate/scripts/prepare-https-introspection.sh"
+          printf 'disposable scoped-state sentinel\n' > "$lab/migrate/state/sentinel"
+          printf 'version: 1\nmode: scoped\n' > "$lab/migrate/config/policy.yaml"
+          python3 - "$lab/migrate/.env" <<'PY'
+          import json,pathlib,sys
+          app=json.load(open("/tmp/introspection-app.json",encoding="utf-8"))
+          cfg={
+              "VPS_AGENT_AUTH_MODE":"integrated",
+              "VPS_AGENT_DOMAIN":"mcp.example.invalid",
+              "VPS_AGENT_INTEGRATED_INTROSPECTION_URL":"http://zitadel-auth-internal:8080/oauth/v2/introspect",
+              "VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_ID":app["clientId"],
+              "VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_SECRET":app["clientSecret"],
+              "VPS_AGENT_GATEWAY_IMAGE":"portico-gate-c-trusted-gateway:disposable",
+              "VPS_AGENT_EDGE_NETWORK":"ci-edge",
+              "VPS_AGENT_ADMIN_TOKEN":"disposable-only-not-owner-admin",
+              "VPS_AGENT_SCOPE_ROOT":"/tmp/portico-disposable-no-mount",
+              "VPS_AGENT_WHOLE_HOST":"0",
+              "VPS_AGENT_BUNDLED_PROXY":"0",
+              "VPS_AGENT_PUBLIC_URL":"https://mcp.example.invalid/mcp",
+              "ZITADEL_MASTERKEY":"00000000000000000000000000000000",
+              "ZITADEL_POSTGRES_PASSWORD":"disposable-not-started",
+              "ZITADEL_BOOTSTRAP_ADMIN_PASSWORD":"disposable-not-started",
+              "ZITADEL_BOOTSTRAP_PAT_EXPIRATION":"2099-01-01T00:00:00Z",
+              "ZITADEL_LOGIN_PAT_EXPIRATION":"2099-01-01T00:00:00Z",
+          }
+          path=pathlib.Path(sys.argv[1])
+          path.write_text("".join(f"{k}={v}\n" for k,v in cfg.items()))
+          path.chmod(0o600)
+          PY
+          cp -p "$lab/migrate/.env" "$lab/original-legacy.env"
+          (
+            set -euo pipefail
+            cd "$lab/migrate"
+            # Explicitly override top-level Compose name to avoid all overlap.
+            export COMPOSE_PROJECT_NAME=portico-gate-c-migration
+            original_hash="$(sha256sum .env | cut -d ' ' -f1)"
+            state_hash="$(sha256sum state/sentinel | cut -d ' ' -f1)"
+            bash scripts/prepare-https-introspection.sh --check
+            test "$(sha256sum .env | cut -d ' ' -f1)" = "$original_hash"
+            test ! -e backups
+            bash scripts/prepare-https-introspection.sh --apply
+            grep -qx 'VPS_AGENT_INTEGRATED_INTROSPECTION_URL=https://mcp.example.invalid/oauth/v2/introspect' .env
+            test "$(stat -c %a .env)" = 600
+            backup="$(find backups -type f -name previous.env -print -quit)"
+            test -n "$backup"
+            test "$(stat -c %a "$backup")" = 600
+            test "$(stat -c %a "$(dirname "$backup")")" = 700
+            cmp -s "$backup" "$lab/original-legacy.env"
+            test "$(sha256sum state/sentinel | cut -d ' ' -f1)" = "$state_hash"
+            # No restart, no identity volume change. Test operator-controlled
+            # byte-exact rollback of the legacy config from private backup.
+            cp -p -- "$backup" .env
+            cmp -s .env "$lab/original-legacy.env"
+            test "$(stat -c %a .env)" = 600
+          )
+          echo "GATE_C_REAL_ZITADEL_ENV_MIGRATION_RESTORE_OK (config backup only; not signed-RC rollback)"
+
 
           echo "ZITADEL + Postgres + isolated Traefik + private CA: PASS (no signed-RC rollback claimed)"
 
