@@ -149,7 +149,7 @@ async function pending(scope) {
 
 async function final(scope, decision) {
   await scope.locator('#status').filter({ hasText: decision === 'approve' ? 'Autorização aprovada com sucesso' : 'Solicitação negada com sucesso' }).waitFor();
-  assert.equal(await scope.locator('#status').evaluate(el => el.classList.contains(decision === 'approve' ? 'status--success' : 'status--warning')), true);
+  assert.equal(await scope.locator('#status').evaluate((el, wanted) => el.classList.contains(wanted), decision === 'approve' ? 'status--success' : 'status--warning'), true);
   assert.equal(await scope.locator('#approve').isDisabled(), true);
   assert.equal(await scope.locator('#deny').isDisabled(), true);
   assert.equal(await scope.locator('#login-panel').isVisible(), false);
