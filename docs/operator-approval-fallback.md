@@ -1,5 +1,8 @@
 # Operador: aprovação segura sem janela nativa MCP
 
+> **Fluxo preferencial Community (11/10/2026):** quando a Central HTTPS do Pórtico está configurada, o pedido retorna `operator_approval_url`. Abra esse link em outra aba, entre como operador, confira o pedido e clique **Autorizar** ou **Negar**. A IA pode consultar `permissions.approval_status` usando `request_id` para detectar a decisão; somente o Broker concede acesso. Se o ChatGPT/Claude encerrar o turno antes da decisão, volte ao chat e peça **“continue”** para consultar o status. Nenhum texto do usuário pode aprovar por si só. Quando a Central não está disponível, use o procedimento SSH abaixo; o Pórtico não altera sua segurança para forçar uma janela do cliente.
+
+
 Mesmo se o cliente de IA anunciar MCP Apps ou *MCP elicitation*, o
 `permissions.request_root_access` ou `permissions.request_sensitive_access`
 cria um pedido **pendente**. O Gateway não libera acesso e **não** compartilha
