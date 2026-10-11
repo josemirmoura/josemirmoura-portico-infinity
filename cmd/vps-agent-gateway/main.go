@@ -59,6 +59,8 @@ func main() {
 		InstanceID:           os.Getenv("VPS_AGENT_INSTANCE_ID"),
 		InstanceName:         getenv("VPS_AGENT_INSTANCE_NAME", "vps-agent"),
 		MaxConcurrentRequests: getenvInt("VPS_AGENT_MAX_CONCURRENT_REQUESTS", 64),
+		ToolCallsPerSecond: getenvInt("VPS_AGENT_TOOL_CALLS_PER_SECOND", 20),
+		ToolCallBurst: getenvInt("VPS_AGENT_TOOL_CALL_BURST", 60),
 	}
 	if issuer != "" {
 		authCfg.AuthorizationServers = []string{issuer}
