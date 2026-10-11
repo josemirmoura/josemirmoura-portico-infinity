@@ -19,7 +19,9 @@ func guardMCPJSONRPCShape(next http.Handler) http.Handler {
             return
         }
         const maxBody=1<<20 // same bound as StreamableHTTPHandler
-        raw,err:=io.ReadAll(io.LimitReader(r.Body,maxBody+1))
+        source:=r.Body
+        raw,err:=io.ReadAll(io.LimitReader(source,maxBody+1))
+        _ = source.Close()
         if err!=nil {
             writeMCPTransportError(w,http.StatusBadRequest,json.RawMessage("null"),-32700,"Cannot read JSON-RPC message",nil)
             return
@@ -72,5 +74,7 @@ func validMCPRequestID(value json.RawMessage) bool {
     var s string
     if json.Unmarshal(value,&s)==nil {return true}
     var n json.Number
-    return json.Unmarshal(value,&n)==nil
+    if json.Unmarshal(value,&n)!=nil {return false}
+    _,err:=n.Int64()
+    return err==nil
 }
