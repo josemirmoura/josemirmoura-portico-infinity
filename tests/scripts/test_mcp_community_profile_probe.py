@@ -39,6 +39,8 @@ class FakeGateway:
             return ok({"prompts": []})
         if method == "resources/list":
             return ok({"resources": []})
+        if method == "resources/templates/list":
+            return ok({"resourceTemplates": []})
         if method == "tools/call":
             return ok({"content": [{"type": "text", "text": "safe"}]})
         if method == "completion/complete":
@@ -75,6 +77,19 @@ class CommunityProfileProbeTests(unittest.TestCase):
         f.tools.append("test_input_required_result_multi_round")
         with self.assertRaisesRegex(module.ProfileFailure, "synthetic diagnostic"):
             self.run_fixture(f)
+
+    def test_synthetic_resource_template_is_blocked(self):
+        f = FakeGateway()
+        original = f.rpc
+        def fake_rpc(url, method, params, ident, *, origin=None):
+            if method == "resources/templates/list":
+                return 200, {"jsonrpc":"2.0", "id":ident, "result":{
+                    "resourceTemplates":[{"name":"fake", "uriTemplate":"test://secret/{id}"}]
+                }}
+            return original(url, method, params, ident, origin=origin)
+        with patch.object(module, "rpc", side_effect=fake_rpc):
+            with self.assertRaisesRegex(module.ProfileFailure, "synthetic resource template"):
+                module.probe(URL)
 
     def test_invalid_origin_reaching_executor_is_blocked(self):
         f = FakeGateway()
