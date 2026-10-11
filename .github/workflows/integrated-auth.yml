@@ -255,7 +255,7 @@ jobs:
           set -euo pipefail
           lab="$(mktemp -d /tmp/portico-zitadel-https.XXXXXXXX)"
           chmod 700 "$lab"
-          trap 'docker rm -f portico-ci-zitadel-tls >/dev/null 2>&1 || true; rm -rf -- "$lab"' EXIT
+          trap 'docker rm -f portico-ci-real-gateway portico-ci-zitadel-tls >/dev/null 2>&1 || true; rm -rf -- "$lab"' EXIT
 
           # No host-published ports, Docker socket, operator credentials or external
           # mounts. Reuse only the already disposable ZITADEL/Postgres CI network.
@@ -379,6 +379,101 @@ jobs:
             --cap-drop ALL --security-opt no-new-privileges:true \
             --mount "type=bind,src=$lab,dst=/pki,readonly" \
             python:3.12-slim-bookworm python3 /pki/probe.py
+
+          # Exercise the exact distributed Gateway binary/image (not a fake
+          # introspection client) against this real TLS-protected ZITADEL.
+          # No privileged Broker, operator host mount or host port is needed.
+          docker build --quiet --target gateway -t portico-gate-c-real-gateway:disposable . >/dev/null
+          python3 - "$lab/gateway.env" <<'PY'
+          import json, pathlib, sys
+          identity=json.load(open("/tmp/introspection-app.json", encoding="utf-8"))
+          project=json.load(open("/tmp/resource-project.json", encoding="utf-8"))["id"]
+          settings={
+              "VPS_AGENT_LISTEN":"0.0.0.0:8080",
+              "VPS_AGENT_POC_ROOT":"/tmp/gate-c-local-root",
+              "VPS_AGENT_AUTH_MODE":"integrated",
+              "VPS_AGENT_OIDC_ISSUER":"https://mcp.example.invalid",
+              "VPS_AGENT_PUBLIC_URL":"https://mcp.example.invalid/mcp",
+              "VPS_AGENT_INTEGRATED_INTROSPECTION_URL":"https://mcp.example.invalid/oauth/v2/introspect",
+              "VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_ID":identity["clientId"],
+              "VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_SECRET":identity["clientSecret"],
+              "VPS_AGENT_INTEGRATED_AUDIENCE_PROJECT_ID":project,
+              "VPS_AGENT_REQUIRED_SCOPES":f"urn:zitadel:iam:org:project:id:{project}:aud",
+              "SSL_CERT_FILE":"/tmp/disposable-ca.pem",
+          }
+          target=pathlib.Path(sys.argv[1])
+          target.write_text("".join(f"{key}={value}\n" for key,value in settings.items()))
+          target.chmod(0o600)
+          PY
+          docker run --detach --rm --name portico-ci-real-gateway \
+            --network ci-edge --read-only \
+            --user 65532:65532 \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,size=16777216 \
+            --mount "type=bind,src=$lab/ca.pem,dst=/tmp/disposable-ca.pem,readonly" \
+            --env-file "$lab/gateway.env" \
+            portico-gate-c-real-gateway:disposable >/dev/null
+          cat > "$lab/gateway-probe.py" <<'PY'
+          import json, time, urllib.error, urllib.request
+
+          token=json.load(open("/pki/probe-token.json",encoding="utf-8"))["access_token"]
+          base="http://portico-ci-real-gateway:8080"
+          opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          payload=json.dumps({
+              "jsonrpc":"2.0", "id":7, "method":"tools/call",
+              "params":{
+                  "name":"system.info", "arguments":{},
+                  "_meta":{
+                      "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                      "io.modelcontextprotocol/clientInfo":{"name":"real-idp-disposable","version":"1"},
+                      "io.modelcontextprotocol/clientCapabilities":{}
+                  }
+              }
+          }).encode()
+          def call(bearer=None):
+              headers={
+                  "Content-Type":"application/json",
+                  "Accept":"application/json, text/event-stream",
+                  "MCP-Protocol-Version":"2026-07-28",
+                  "Mcp-Method":"tools/call",
+                  "Mcp-Name":"system.info",
+              }
+              if bearer is not None:
+                  headers["Authorization"]="Bearer "+bearer
+              return urllib.request.Request(base+"/mcp",data=payload,headers=headers,method="POST")
+          response=None
+          for attempt in range(45):
+              try:
+                  response=opener.open(call(token),timeout=5)
+                  break
+              except (urllib.error.URLError, OSError):
+                  if attempt==44:
+                      raise
+                  time.sleep(1)
+          with response as authenticated:
+              assert authenticated.status==200, authenticated.status
+              result=json.load(authenticated)
+              assert not result.get("error"), "unexpected JSON-RPC error"
+              assert result.get("result",{}).get("isError") is not True, "tool denied"
+              content=result["result"]
+              assert content, "empty real Gateway result"
+          for bearer in (None, "invalid-gate-c-token"):
+              try:
+                  opener.open(call(bearer),timeout=7)
+                  raise AssertionError("unauthenticated Gateway tool call was accepted")
+              except urllib.error.HTTPError as err:
+                  assert err.code==401, err.code
+                  assert "resource_metadata=" in err.headers.get("WWW-Authenticate","")
+          print("GATE_C_REAL_GATEWAY_REAL_ZITADEL_TLS_OK")
+          PY
+          docker run --rm --network ci-edge \
+            --user "$(id -u):$(id -g)" \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --mount "type=bind,src=$lab,dst=/pki,readonly" \
+            python:3.12-slim-bookworm python3 /pki/gateway-probe.py
+          docker rm -f portico-ci-real-gateway >/dev/null
+          echo "Real distributed Gateway + real ZITADEL introspection via trusted HTTPS: PASS (local nonprivileged executor; Broker proof separate)"
+
           echo "ZITADEL + Postgres + isolated Traefik + private CA: PASS (no signed-RC rollback claimed)"
 
       - name: Cleanup
