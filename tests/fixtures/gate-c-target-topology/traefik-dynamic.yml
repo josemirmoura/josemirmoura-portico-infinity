@@ -1,0 +1,16 @@
+http:
+  routers:
+    introspection:
+      rule: "Host(`idp.gate-c.test`) && Path(`/oauth/v2/introspect`)"
+      entryPoints: [secure]
+      service: fixture-idp
+      tls: {}
+  services:
+    fixture-idp:
+      loadBalancer:
+        servers:
+          - url: "http://lab-idp:8080"
+tls:
+  certificates:
+    - certFile: /pki/server.pem
+      keyFile: /pki/server.key
