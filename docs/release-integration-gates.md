@@ -2,6 +2,30 @@
 
 **Scope:** one compatible AI chat, one Linux computer, Scoped authority. This ledger is a release-readiness contract, not a notice of general availability. Public Community facts only; private Cloud plans and owner infrastructure details do not belong here.
 
+## Current release checkpoint: 2026-10-11 (PR #146/#147 integrated)
+
+**Code baseline fixed for this checkpoint:** [`a8efe5b1a32a020143880176e410c78ba74305c9`](https://github.com/josemirmoura/mcp-vps-agent-gateway/commit/a8efe5b1a32a020143880176e410c78ba74305c9), staging PR [#99](https://github.com/josemirmoura/mcp-vps-agent-gateway/pull/99) (`integration/community-stable-block5-20261009`). GitHub API check-runs for that **exact SHA**: **36/36 completed SUCCESS**, none failed/cancelled/pending. These are **check runs**, not 36 independent workflows or 36 MCP normative requirements. Any later documentation commit or code change becomes a different SHA and must have its own CI record before promotion.
+
+- [PR #146](https://github.com/josemirmoura/mcp-vps-agent-gateway/pull/146): uninstall fails closed when invoked from a foreign checkout, including remaining identity volumes/networks/images with no ownership-proving container. The Docker package regression requires denial of orphaned-volume purge and verifies a later purge **only after** supported installation ownership is re-established.
+- [PR #147](https://github.com/josemirmoura/mcp-vps-agent-gateway/pull/147): clean Ubuntu 24.04 runner tests actual container bootstrap, health, a **synthetically signed fixture** update and rollback, safe remove/reinstall, owned purge, orphan-volume denial, completely clean reinstallation, Broker and audit. [E2E workflow run 38183189059](https://github.com/josemirmoura/mcp-vps-agent-gateway/actions/runs/38183189059), artifact `gate-c-disposable-lifecycle-evidence` ID `11718069977` (digest `sha256:863126238bae55eedfabd224ade8facdb450a9163ada1f96711b32e4ac2eef50`).
+- Final integrated [docker-package workflow run 38183551802](https://github.com/josemirmoura/mcp-vps-agent-gateway/actions/runs/38183551802) completed SUCCESS; artifact `docker-package-evidence-38183551802` ID `11718338675`, digest `sha256:dbb76cea9b05d0718d9e8947bdcff4de9b7b7ed2de4b8962c1eada8dc91eb292`. Artifacts are retained by GitHub Actions only until their configured expiry; cited SHA/run IDs persist as record identifiers, not substitutes for archived evidence.
+
+### Decision matrix for the candidate (no publish authorization)
+
+| Gate | Decision at the frozen code baseline | Unfinished acceptance |
+| --- | --- | --- |
+| Engineering/packaging CI | **PASS for the 36 check-runs on this SHA only** | Re-run exact candidate after any code or documentation/promotional change; verify release-specific security/build workflow before publication |
+| MCP 2026-07-28 normative acceptance (#79/#130) | **BLOCKED** | Historical normal Gateway score 8 PASS / 2 FAIL / 3 SKIPPED / 24 NOT_TESTED; the synthetic lab's 35/1/1/0 is **not** product conformance. Independent auditor must assess applicable MUST/SHOULD, raw results and actual OAuth/Broker implementation at an exact SHA |
+| Real operator approval, desktop/mobile (#65) | **NOT TESTED for final candidate** | Owner proof of authenticated allow, deny, revoke and fallback on an actual client/device |
+| License/authorship/IP (#57/#68) | **BLOCKED** | Documented owner/legal approval and correct notices, keeping historical Apache-2.0 release grants intact |
+| Signed immutable release candidate | **NOT TESTED** | `VERSION=0.1.0-rc.7` but public Releases still end at `v0.1.0-rc.6` (checked 2026-10-11); authorized publish and independent source/Sigstore plus all GHCR image-digest verifications outstanding |
+| Owner clean-install, OAuth, recovery (#65, Gate E) | **NOT TESTED for a genuine signed RC** | Supported isolated destination, real identity service/HTTPS/ChatGPT and exact signed candidate, operator sign-off and controlled recovery |
+| Stable `v0.1.0` | **NO-GO** | All gates A–F in [execution plan](execution-plan.md) must close on accepted frozen commits |
+
+**Boundary:** all added full-cycle tests run in GitHub-hosted disposable infrastructure with synthetic release verifiers, **not** on the owner's shared VPS. They prove neither authentic published signatures nor real ChatGPT authorization nor complete official MCP conformance. Do not run purge/uninstall from a secondary checkout against the production Docker daemon. No `main` merge, tag, release, GHCR publication, DNS, policy or VPS change was made as part of this checkpoint. Publication remains an explicit owner-only workflow and is prohibited while gates are open.
+
+---
+
 **Round-two integration snapshot (2026-10-09, 23:59 UTC onward):** public `main` = `4212f30f7c145c8bbd0043b42bdc7dd95e466cd5`; **staging PR #99** = `9da45838517d6e4baa5e63236027f6a7471c66cb`. The second-round code changes from Blocks 1–4 are already combined in staging; `main` and owner VPS remain unchanged. Final exact-SHA recheck: **18/18 GitHub Actions workflows completed with SUCCESS** for `9da45838517d6e4baa5e63236027f6a7471c66cb`, including `docker-package-acceptance` run `38009010754`. These are automated staging results, not owner acceptance or a release signature. The newest verified published release remains `v0.1.0-rc.6`, and `VERSION=0.1.0-rc.7` alone is not a published signed RC7. Staging CI does not certify official MCP conformance, real client UX, legal rights or release signatures.
 
 ## Third-round independent integration checkpoint (2026-10-10)
