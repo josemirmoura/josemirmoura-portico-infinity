@@ -27,6 +27,13 @@
 | subscriptions/listen | Condicional | Produto oferece listas estaticas sem listChanged. Nao anunciar eventos que nao emite | Se houver stream listen anunciado, provar encerramento e isolamento |
 | OAuth resource server | MUST no deployment integrado | JWT/introspection, 401 invalid token, 403 insufficient scope, Bearer challenge metadata e TLS fixture com CA validada | HTTPS/introspection real atras do Docker/Traefik e rollback RC7 em clone de destino nao provados |
 
+## Evidencias negativas adicionais do Gateway normal
+
+- `internal/gateway/mcp_gate_c_malformed_jsonrpc_test.go`: POSTs com JSON inválido, versionamento incorreto, método ausente, parâmetros e IDs inválidos retornam erro estruturado antes do Executor. Erros de argumentos de ferramentas podem corretamente retornar `tools/call` com `isError: true`, desde que nenhuma ação alcance o Broker.
+- `internal/gateway/mcp_jsonrpc_shape.go`: guard de estrutura JSON-RPC após autenticação e limites de concorrência/rate-limit, antes da SDK. Não altera o catálogo e não concede autoridade. Limite de leitura igual a 1 MiB do SDK.
+- `internal/gateway/mcp_gate_c_mrtr_navigation_test.go`: verifica HMAC, expiração, sujeito e recurso; a aceitação nativa não concede acesso, somente consulta `permissions.approval_status`.
+- Esta cobertura permanece **PARCIAL**: interpretação de todo SHOULD da especificação, todos os tipos de conteúdo, interações de MRTR com clientes reais e rollback de operações Broker em andamento não foram certificados.
+
 ## Regras de provas e aceites
 
 1. Separar test suite oficial congelada (resultado **literal**) da prova de requisitos **aplicaveis** do Gateway normal. Nao alterar checks.json, nao criar test_* no runtime e nao mascarar falsos positivos.

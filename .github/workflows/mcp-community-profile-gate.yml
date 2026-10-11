@@ -84,6 +84,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p evidence
+          go test -count=1 -run TestGateCRealHTTPMalformedJSONRPCNeverReachesExecutor -v ./internal/gateway
+          go test -count=1 -run TestGateCMRTRSignedNavigationNeverGrantsAccess -v ./internal/gateway
           go test -race -count=1 -json ./internal/gateway ./tests/integration > evidence/go-protocol-tests.jsonl
           python3 - <<'PY'
           import json
@@ -114,6 +116,8 @@ jobs:
               'TestGateCRealProductionToolCatalogSchemas202012',
               'TestGateCRealGatewayDoesNotAdvertiseDeprecatedUnusedLogging',
               'TestGateCRealHandlerRequestContextPropagatesDisconnect',
+              'TestGateCRealHTTPMalformedJSONRPCNeverReachesExecutor',
+              'TestGateCMRTRSignedNavigationNeverGrantsAccess',
           }
           events = [json.loads(line) for line in Path('evidence/go-protocol-tests.jsonl').read_text().splitlines() if line.strip()]
           passed = {e['Test'] for e in events if e.get('Action') == 'pass' and e.get('Test')}
