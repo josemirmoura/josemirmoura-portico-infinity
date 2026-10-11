@@ -36,7 +36,7 @@ func TestGateCMRTRSignedNavigationNeverGrantsAccess(t *testing.T) {
     const root="/opt/fixture-project"
     const other="/opt/other"
     spy:=&gateCNavigationSpy{}
-    srv:=&Server{Executor:spy, navigationKey:[]byte("fixture-hmac-key-32-bytes-private!!")}
+    srv:=&Server{Executor:spy, navigationKey:[]byte("0123456789abcdef0123456789abcdef")}
     alice:=context.WithValue(context.Background(),subjectKey{},"alice")
     bob:=context.WithValue(context.Background(),subjectKey{},"bob")
     state:=operatorNavigationState{
