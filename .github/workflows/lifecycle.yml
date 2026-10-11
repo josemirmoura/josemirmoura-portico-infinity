@@ -153,6 +153,91 @@ jobs:
           ! docker image inspect mcp-vps-agent-gateway:local >/dev/null 2>&1
           ! docker image inspect mcp-vps-agent-broker:local >/dev/null 2>&1
 
+      - name: Reject orphaned identity resources after full purge
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Dedicated GitHub runner only. No production Docker host or credentials.
+          test ! -e .env
+          test ! -e config/policy.yaml
+          orphan="mcp-vps-agent_zitadel-bootstrap"
+          docker volume create "$orphan" >/dev/null
+          trap 'docker volume rm "$orphan" >/dev/null 2>&1 || true' EXIT
+          if VPS_AGENT_PURGE_CONFIRM=PURGE bash scripts/remove.sh --purge \
+             > "$RUNNER_TEMP/orphan-purge.txt" 2>&1; then
+            echo 'Unexpectedly purged resources without owning Compose containers' >&2
+            exit 1
+          fi
+          grep -q 'manual ownership verification required' "$RUNNER_TEMP/orphan-purge.txt"
+          docker volume inspect "$orphan" >/dev/null
+          test ! -e .env
+          docker volume rm "$orphan" >/dev/null
+          trap - EXIT
+
+      - name: Reinstall from fully purged state and validate fresh audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/init.sh --scope /opt/vps-agent-lifecycle-scope
+          test -f .env
+          test -f config/policy.yaml
+          docker compose up -d --build
+          bash scripts/verify.sh
+          docker compose exec -T broker /usr/local/bin/vps-agent audit-status \
+            > "$RUNNER_TEMP/audit.after-clean-reinstall.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          p=Path(os.environ["RUNNER_TEMP"])/"audit.after-clean-reinstall.json"
+          result=json.loads(p.read_text())
+          assert result["ok"] is True and result["result"]["valid"] is True, result
+          PY
+
+      - name: Final purge is clean and does not delete scoped workloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          VPS_AGENT_PURGE_CONFIRM=PURGE bash scripts/remove.sh --purge
+          test ! -e .env
+          test ! -e config/policy.yaml
+          test ! -e state
+          test -d /opt/vps-agent-lifecycle-scope
+          test -z "$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)"
+          test -z "$(docker volume ls -q --filter label=com.docker.compose.project=mcp-vps-agent)"
+
+      - name: Save isolated E2E evidence with explicit synthetic-release caveat
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/portico-lifecycle-evidence"
+          install -d -m 0700 "$evidence"
+          python3 - "$evidence/result.json" <<'PY'
+          import datetime, json, os, pathlib, sys
+          evidence={
+              "runner": "GitHub-hosted disposable ubuntu-24.04",
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "source_sha": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "recorded_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "checks": ["install", "verify", "synthetic_release_update",
+                         "failed_update_rollback", "safe_remove", "reinstall",
+                         "full_purge", "orphan_purge_denial", "fresh_reinstall",
+                         "audit_integrity", "final_purge"],
+              "release_provenance": "FAKE TEST FIXTURE ONLY",
+              "production_release_signature_verified": False,
+              "real_zitadel_and_chatgpt_acceptance": False,
+              "gate_c_approved": False,
+          }
+          pathlib.Path(sys.argv[1]).write_text(json.dumps(evidence, indent=2)+"\n")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gate-c-disposable-lifecycle-evidence
+          path: ${{ runner.temp }}/portico-lifecycle-evidence/
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Cleanup
         if: always()
         run: |
