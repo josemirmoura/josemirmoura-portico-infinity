@@ -117,11 +117,11 @@
     {
       "id": "C13",
       "family": "transport",
-      "rule": "SSE stream notification semantics and proxy buffering",
+      "rule": "Optional SSE per-request response vs JSON profile",
       "applicability": "CONDITIONAL",
-      "status": "NOT_PROVEN",
+      "status": "NOT_ADVERTISED",
       "evidence": "internal/gateway/gateway.go",
-      "limitation": "JSONResponse=true; request-scope SSE and X-Accel-Buffering require independent review"
+      "limitation": "2026 Streamable HTTP accepts either JSON or request-scoped SSE; Community sets JSONResponse=true. SSE streaming is not claimed. Cancellation under load remains C12."
     },
     {
       "id": "C14",
@@ -201,8 +201,8 @@
       "rule": "tools/list complete, no test-only diagnostics in product",
       "applicability": "MUST_IF_TOOLS",
       "status": "LAB_PASS",
-      "evidence": "scripts/mcp_community_profile_probe.py",
-      "limitation": "Full normal catalog inspected; no synthetic test_* names"
+      "evidence": "internal/gateway/mcp_gate_c_catalog_schema_test.go",
+      "limitation": "Real Gateway tools/list catalog checked twice for stable order, unique names and descriptor schemas; synthetic conformance names excluded in production profile probe."
     },
     {
       "id": "C23",
@@ -210,8 +210,8 @@
       "rule": "tool input schema validation and bounded responses",
       "applicability": "MUST_IF_TOOLS",
       "status": "PARTIAL",
-      "evidence": "internal/gateway/gateway.go",
-      "limitation": "Known negative schema tests; no exhaustive audit of every tool/schema"
+      "evidence": "internal/gateway/mcp_gate_c_catalog_schema_test.go",
+      "limitation": "Actual tools/list all descriptors resolved against local JSON Schema 2020-12; outputSchema tested with system.info structured result. Runtime rejection and other structured outputs remain PARTIAL."
     },
     {
       "id": "C24",
@@ -279,11 +279,11 @@
     {
       "id": "C31",
       "family": "logging",
-      "rule": "Advertised logging capabilities and setLevel",
-      "applicability": "MUST_IF_LOGGING",
-      "status": "PARTIAL",
-      "evidence": "internal/gateway/gateway.go",
-      "limitation": "Advertised logging; no standalone proof here that all logging rules are met"
+      "rule": "Deprecated optional MCP logging capability not advertised",
+      "applicability": "OPTIONAL",
+      "status": "NOT_ADVERTISED",
+      "evidence": "internal/gateway/mcp_gate_c_catalog_schema_test.go",
+      "limitation": "2026-07-28 logging is deprecated; request-scoped notifications/message not emitted. No obsolete logging/setLevel obligation. Broker audit and runtime observability are separate."
     },
     {
       "id": "C32",
@@ -291,8 +291,8 @@
       "rule": "JSON Schema 2020-12 and output-schema dialect",
       "applicability": "MUST_IF_SCHEMA",
       "status": "PARTIAL",
-      "evidence": "internal/gateway/gateway.go",
-      "limitation": "SDK-driven validation; independent dialect acceptance and full catalog review needed"
+      "evidence": "internal/gateway/mcp_gate_c_catalog_schema_test.go",
+      "limitation": "All current input/output catalog schemas resolved offline with local refs as JSON Schema 2020-12. Runtime validation of arbitrary composition and conditionals, and structuredContent for every tool, not exhaustively proven."
     },
     {
       "id": "C33",
