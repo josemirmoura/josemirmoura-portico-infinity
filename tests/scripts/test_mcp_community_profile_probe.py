@@ -2,6 +2,8 @@
 from __future__ import annotations
 import importlib.util
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -37,6 +39,8 @@ class FakeGateway:
             return ok({"prompts": []})
         if method == "resources/list":
             return ok({"resources": []})
+        if method == "resources/templates/list":
+            return ok({"resourceTemplates": []})
         if method == "tools/call":
             return ok({"content": [{"type": "text", "text": "safe"}]})
         if method == "completion/complete":
@@ -74,6 +78,19 @@ class CommunityProfileProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(module.ProfileFailure, "synthetic diagnostic"):
             self.run_fixture(f)
 
+    def test_synthetic_resource_template_is_blocked(self):
+        f = FakeGateway()
+        original = f.rpc
+        def fake_rpc(url, method, params, ident, *, origin=None):
+            if method == "resources/templates/list":
+                return 200, {"jsonrpc":"2.0", "id":ident, "result":{
+                    "resourceTemplates":[{"name":"fake", "uriTemplate":"test://secret/{id}"}]
+                }}
+            return original(url, method, params, ident, origin=origin)
+        with patch.object(module, "rpc", side_effect=fake_rpc):
+            with self.assertRaisesRegex(module.ProfileFailure, "synthetic resource template"):
+                module.probe(URL)
+
     def test_invalid_origin_reaching_executor_is_blocked(self):
         f = FakeGateway()
         f.origin_rejected = False
@@ -102,6 +119,50 @@ class CommunityProfileProbeTests(unittest.TestCase):
         for url in urls:
             with self.subTest(url=url), self.assertRaises(module.ProfileFailure):
                 module.loopback_endpoint(url)
+
+    def test_redirect_is_refused_without_followup_even_on_loopback(self):
+        observed = []
+        class RedirectingGateway(BaseHTTPRequestHandler):
+            def do_POST(self):
+                observed.append(self.path)
+                if self.path == "/mcp":
+                    self.send_response(302)
+                    self.send_header("Location", "http://127.0.0.1:%d/remote" % self.server.server_port)
+                    self.end_headers()
+                else:
+                    # This route must never be requested.
+                    self.send_response(200)
+                    self.end_headers()
+            def do_GET(self):
+                observed.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), RedirectingGateway)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = "http://127.0.0.1:%d/mcp" % server.server_port
+            with self.assertRaisesRegex(module.ProfileFailure, "redirect"):
+                module.rpc(url, "server/discover", {"_meta": module.META}, 31)
+            self.assertEqual(observed, ["/mcp"], "verifier followed a redirect")
+        finally:
+            server.shutdown()
+            thread.join(timeout=3)
+            server.server_close()
+
+    def test_transport_disables_environment_proxies(self):
+        from urllib.request import ProxyHandler
+        # An explicit empty ProxyHandler must be installed for EVERY request.
+        with patch.object(module, "build_opener", wraps=module.build_opener) as build:
+            with self.assertRaises(module.ProfileFailure):
+                module.rpc("http://127.0.0.1:1/mcp", "server/discover", {"_meta": module.META}, 32)
+            self.assertTrue(build.called)
+            handlers = build.call_args.args
+            self.assertTrue(any(isinstance(h, ProxyHandler) and h.proxies == {} for h in handlers))
+            self.assertTrue(any(isinstance(h, module.DenyRedirect) for h in handlers))
 
     def test_failure_output_never_reports_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
