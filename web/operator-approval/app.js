@@ -36,7 +36,7 @@ async function load(afterLogin=false){
   $('details').hidden=false;$('login-panel').hidden=true;
   const pending=data.status==='pending'&&!!csrf&&!!nonce;
   $('approve').disabled=!pending;$('deny').disabled=!pending;
-  const final={approved:'Autorização confirmada pelo Broker.',denied:'Solicitação negada. Nenhuma permissão concedida.',expired:'Pedido ou permissão expirou.',cancelled:'Pedido cancelado.',revoked:'Permissão revogada.'};
+  const final={approved:'Autorização confirmada pelo Broker. Volte à conversa; se a IA não retomar, escreva “continue”.',denied:'Solicitação negada. Nenhuma permissão concedida.',expired:'Pedido ou permissão expirou.',cancelled:'Pedido cancelado.',revoked:'Permissão revogada.'};
   status(pending?'Confira a máquina, o solicitante, o recurso e o perfil antes de decidir.':(final[data.status]||'Pedido indisponível para decisão.'),pending?'info':data.status==='approved'?'success':data.status==='denied'?'warning':'error');
   notify(pending?'ready':data.status);
  }catch(e){if(view!==generation)return;status(e.message);$('details').hidden=true;$('login-panel').hidden=!e.message.includes('Sessão não autenticada')}
@@ -59,7 +59,7 @@ async function decide(decision){
   if(view!==generation)return;
   if(result.request_id!==requestId||result.status!==(decision==='approve'?'approved':'denied'))throw Error('O Broker não confirmou a decisão.');
   csrf='';nonce='';$('login-panel').hidden=true;$('details').hidden=false;$('step-up-panel').hidden=true;
-  status(decision==='approve'?'Autorização aprovada com sucesso. Permissão concedida conforme prazo exibido.':'Solicitação negada com sucesso. Nenhuma permissão foi concedida.',decision==='approve'?'success':'warning');
+  status(decision==='approve'?'Autorização aprovada com sucesso. Permissão concedida conforme prazo exibido. Volte ao chat; se necessário, escreva “continue”.':'Solicitação negada com sucesso. Nenhuma permissão foi concedida.',decision==='approve'?'success':'warning');
   notify(result.status);
   // Retain confirmed final state. No pending-only refetch may overwrite success.
  }catch(e){if(view===generation){csrf='';nonce='';status(e.message+' Use Consultar estado antes de tentar novamente.')}}finally{deciding=false;$('refresh').disabled=loggingOut}
