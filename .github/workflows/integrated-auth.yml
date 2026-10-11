@@ -249,6 +249,134 @@ jobs:
           print('REAL DYNAMIC CLIENT REGISTRATION: PASS')
           PY
 
+      - name: Gate C real ZITADEL introspection through verified isolated Traefik TLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          lab="$(mktemp -d /tmp/portico-zitadel-https.XXXXXXXX)"
+          chmod 700 "$lab"
+          trap 'docker rm -f portico-ci-zitadel-tls >/dev/null 2>&1 || true; rm -rf -- "$lab"' EXIT
+
+          # No host-published ports, Docker socket, operator credentials or external
+          # mounts. Reuse only the already disposable ZITADEL/Postgres CI network.
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout "$lab/ca.key" -out "$lab/ca.pem" \
+            -subj '/CN=Portico Disposable CA' \
+            -addext 'basicConstraints=critical,CA:TRUE' \
+            -addext 'keyUsage=critical,keyCertSign,cRLSign' >/dev/null 2>&1
+          openssl req -new -newkey rsa:2048 -nodes \
+            -keyout "$lab/server.key" -out "$lab/server.csr" \
+            -subj '/CN=mcp.example.invalid' >/dev/null 2>&1
+          printf 'subjectAltName=DNS:mcp.example.invalid\nextendedKeyUsage=serverAuth\nbasicConstraints=CA:FALSE\n' > "$lab/server.ext"
+          openssl x509 -req -in "$lab/server.csr" -CA "$lab/ca.pem" \
+            -CAkey "$lab/ca.key" -CAcreateserial -out "$lab/server.pem" \
+            -days 1 -extfile "$lab/server.ext" >/dev/null 2>&1
+          chmod 600 "$lab/"*.key
+          cat > "$lab/traefik.yml" <<'YAML'
+          http:
+            routers:
+              introspection:
+                rule: 'Host("mcp.example.invalid") && Path("/oauth/v2/introspect")'
+                entryPoints: [secure]
+                service: real-zitadel
+                tls: {}
+            services:
+              real-zitadel:
+                loadBalancer:
+                  servers:
+                    - url: "h2c://zitadel-api:8080"
+          tls:
+            certificates:
+              - certFile: /pki/server.pem
+                keyFile: /pki/server.key
+          YAML
+          cp /tmp/introspection-app.json "$lab/introspection-app.json"
+          cp /tmp/probe-token.json "$lab/probe-token.json"
+          chmod 600 "$lab/"*.json
+
+          # File-provider only. No Docker API, privileged container, host ports,
+          # host networking or access to the operator's real DNS/certificates.
+          docker run --detach --rm --name portico-ci-zitadel-tls \
+            --network ci-edge --network-alias mcp.example.invalid \
+            --cap-drop ALL --cap-add NET_BIND_SERVICE \
+            --security-opt no-new-privileges:true \
+            --mount "type=bind,src=$lab,dst=/pki,readonly" \
+            traefik:v3.6 \
+            --entrypoints.secure.address=:443 \
+            --providers.file.filename=/pki/traefik.yml \
+            --api.dashboard=false --log.level=ERROR >/dev/null
+
+          cat > "$lab/probe.py" <<'PY'
+          import base64, json, os, ssl, time, urllib.error, urllib.parse, urllib.request
+
+          base = "https://mcp.example.invalid/oauth/v2/introspect"
+          client = json.load(open("/pki/introspection-app.json", encoding="utf-8"))
+          token = json.load(open("/pki/probe-token.json", encoding="utf-8"))["access_token"]
+          client_id, client_secret = client["clientId"], client["clientSecret"]
+          secure_context = ssl.create_default_context(cafile="/pki/ca.pem")
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args):
+                  return None
+
+          def opener(ctx):
+              return urllib.request.build_opener(
+                  urllib.request.HTTPSHandler(context=ctx),
+                  urllib.request.ProxyHandler({}), NoRedirect())
+
+          def request(bearer, client_secret_override=None, url=base):
+              secret = client_secret if client_secret_override is None else client_secret_override
+              credentials = base64.b64encode((client_id + ":" + secret).encode()).decode()
+              body = urllib.parse.urlencode({"token": bearer}).encode()
+              return urllib.request.Request(url, data=body, method="POST", headers={
+                  "Authorization": "Basic " + credentials,
+                  "Content-Type": "application/x-www-form-urlencoded"})
+
+          trusted = opener(secure_context)
+          for attempt in range(40):
+              try:
+                  with trusted.open(request("invalid-disposable-token"), timeout=4) as response:
+                      assert response.status == 200, response.status
+                      assert json.load(response).get("active") is False
+                  break
+              except (OSError, urllib.error.URLError):
+                  if attempt == 39:
+                      raise
+                  time.sleep(2)
+
+          with trusted.open(request(token), timeout=8) as response:
+              assert response.status == 200
+              actual = json.load(response)
+              assert actual.get("active") is True
+              assert actual.get("sub")
+              assert actual.get("iss") == "https://mcp.example.invalid"
+              assert actual.get("aud")
+          try:
+              trusted.open(request(token, client_secret_override="invalid-client-secret"), timeout=8)
+              raise AssertionError("wrong introspection credentials were accepted")
+          except urllib.error.HTTPError as exc:
+              assert exc.code == 401, exc.code
+
+          try:
+              opener(ssl.create_default_context()).open(request(token), timeout=8)
+              raise AssertionError("untrusted CA unexpectedly accepted")
+          except (ssl.SSLError, urllib.error.URLError):
+              pass
+
+          try:
+              trusted.open(request(token, url="https://portico-ci-zitadel-tls/oauth/v2/introspect"), timeout=8)
+              raise AssertionError("incorrect TLS hostname unexpectedly accepted")
+          except (ssl.SSLError, urllib.error.URLError):
+              pass
+
+          print("GATE_C_REAL_ZITADEL_TRUSTED_HTTPS_OK")
+          PY
+          docker run --rm --network ci-edge \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --mount "type=bind,src=$lab,dst=/pki,readonly" \
+            python:3.12-slim-bookworm python3 /pki/probe.py
+          echo "ZITADEL + Postgres + isolated Traefik + private CA: PASS (no signed-RC rollback claimed)"
+
       - name: Cleanup
         if: always()
         run: |
