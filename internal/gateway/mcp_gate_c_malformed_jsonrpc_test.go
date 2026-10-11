@@ -27,6 +27,9 @@ func TestGateCRealHTTPMalformedJSONRPCNeverReachesExecutor(t *testing.T) {
         {"non-string-method", `{"jsonrpc":"2.0","id":41,"method":12,`+goodParams+"}"},
         {"invalid-params-container", `{"jsonrpc":"2.0","id":41,"method":"tools/call","params":[]}`},
         {"invalid-arguments-type", `{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"system.info","arguments":"not-object",`+metadata+"}}"},
+        {"null-id", `{"jsonrpc":"2.0","id":null,"method":"tools/call",`+goodParams+"}"},
+        {"boolean-id", `{"jsonrpc":"2.0","id":true,"method":"tools/call",`+goodParams+"}"},
+        {"object-id", `{"jsonrpc":"2.0","id":{},"method":"tools/call",`+goodParams+"}"},
         {"invalid-tool-name-type", `{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":true,"arguments":{},`+metadata+"}}"},
     }
     for _,tc:=range cases {
@@ -49,6 +52,21 @@ func TestGateCRealHTTPMalformedJSONRPCNeverReachesExecutor(t *testing.T) {
             }
             raw,err:=io.ReadAll(io.LimitReader(response.Body,1<<20))
             if err!=nil {t.Fatal(err)}
+            // The MCP tools layer may report invalid arguments in a successful
+            // JSON-RPC envelope with an isError=true tool result. It is still
+            // a rejection and must never reach the executor.
+            if tc.name=="invalid-arguments-type" {
+                var reply struct {
+                    Result struct { IsError bool `json:"isError"` } `json:"result"`
+                }
+                if response.StatusCode!=http.StatusOK ||
+                    json.Unmarshal(raw,&reply)!=nil || !reply.Result.IsError {
+                    t.Fatalf("invalid arguments did not produce MCP tool error: HTTP %d %s",response.StatusCode,raw)
+                }
+                calls,_:=probe.snapshot()
+                if calls!=0 {t.Fatal("invalid tool arguments reached executor")}
+                return
+            }
             if !strings.Contains(response.Header.Get("Content-Type"),"application/json") {
                 t.Fatalf("malformed request returned non-JSON response: HTTP %d Content-Type %q", response.StatusCode,response.Header.Get("Content-Type"))
             }
