@@ -27,6 +27,8 @@ type AuthConfig struct {
 	InstanceID           string
 	InstanceName         string
 	MaxConcurrentRequests int
+	ToolCallsPerSecond int
+	ToolCallBurst int
 }
 
 func (a AuthConfig) ProtectedResourceMetadataHandler() http.Handler {
