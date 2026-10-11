@@ -75,6 +75,14 @@ func main() {
 			slog.Error("integrated_auth_config_invalid", "reason", "OAuth resource/public URL and issuer required"); os.Exit(1)
 		}
 		introspectionURL := os.Getenv("VPS_AGENT_INTEGRATED_INTROSPECTION_URL")
+		// The released Gateway must never use a plaintext introspection
+		// endpoint. Internal numeric-loopback HTTP is permitted only by
+		// disposable unit tests that construct NewIntegratedOIDCVerifier directly.
+		introspectionTarget, parseErr := url.Parse(introspectionURL)
+		if parseErr != nil || introspectionTarget == nil || introspectionTarget.Scheme != "https" {
+			slog.Error("integrated_auth_config_invalid", "reason", "HTTPS introspection URL required for distributed Gateway")
+			os.Exit(1)
+		}
 		introspectionHost := os.Getenv("VPS_AGENT_INTEGRATED_INTROSPECTION_HOST")
 		introspectionClientID := os.Getenv("VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_ID")
 		introspectionClientSecret := os.Getenv("VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_SECRET")
