@@ -481,6 +481,33 @@ jobs:
           systemctl is-active --quiet vps-agent-docker-proof.service
           echo "SAFE REMOVE ACCEPTANCE: PASS" | tee evidence/remove-safe-result.txt
 
+      - name: Refuse purge of orphaned volumes after safe removal
+        shell: bash
+        run: |
+          set -euo pipefail
+          if VPS_AGENT_PURGE_CONFIRM=PURGE bash scripts/remove.sh --purge \
+             > evidence/remove-orphan-denied.txt 2>&1; then
+            echo "SECURITY FAILURE: orphaned Compose volumes purged without ownership" >&2
+            exit 1
+          fi
+          grep -q 'manual ownership verification required' evidence/remove-orphan-denied.txt
+          test -f .env
+          test -f config/policy.yaml
+          test -f state/state.db
+          docker volume inspect mcp-vps-agent_broker-run >/dev/null
+          echo "ORPHAN PURGE DENIAL: PASS" | tee evidence/remove-orphan-result.txt
+
+      - name: Re-establish package ownership for supported full purge
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose up -d
+          bash scripts/verify.sh
+          broker="$(docker compose ps -q broker)"
+          test -n "$broker"
+          test "$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$broker")" = "$(pwd -P)"
+          echo "OWNED RUNTIME RESTORED: PASS" | tee evidence/reinstall-before-purge-result.txt
+
       - name: Full purge removes only MCP-owned artifacts
         shell: bash
         run: |
