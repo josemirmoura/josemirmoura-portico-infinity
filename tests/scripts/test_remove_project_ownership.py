@@ -27,7 +27,7 @@ class RemoveProjectOwnershipTests(unittest.TestCase):
         self.assertEqual(source.count(END), 1)
         self.assertLess(source.index('repo_root="$PWD"'), source.index(START))
         self.assertLess(source.index(END), source.index('if [ -f .env ]; then'))
-        self.assertLess(source.index(END), source.index('project_ids="$(docker ps'))
+        self.assertLess(source.index(END), source.index('\nproject_ids="$(docker ps'))
         self.guard = source[source.index(START):source.index(END) + len(END)]
 
     def execute(self, *, project="mcp-vps-agent", ids="deadc0dedead\nfeedfacefeed",
