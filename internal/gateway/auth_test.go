@@ -66,6 +66,94 @@ func TestOAuthChallengeAdvertisesResourceMetadata(t *testing.T) {
 	}
 }
 
+// Regression for the upstream Go SDK v1.8.0 missing OAuth insufficient_scope
+// challenge parameter. Keep a genuine Broker/application 403 distinct from
+// scope-step-up, and never convert invalid bearers into a scope challenge.
+func TestOAuthInsufficientScopeChallengeOnlyBeforeAuthentication(t *testing.T) {
+	const metadataURL = "https://mcp.example.com/.well-known/oauth-protected-resource"
+	verifier := mcpauth.TokenVerifier(func(_ context.Context, token string, _ *http.Request) (*mcpauth.TokenInfo, error) {
+		if token != "reader" && token != "writer" {
+			return nil, mcpauth.ErrInvalidToken
+		}
+		scopes := []string{"portico.read"}
+		if token == "writer" {
+			scopes = append(scopes, "portico.write")
+		}
+		return &mcpauth.TokenInfo{
+			UserID: "operator-123", Scopes: scopes,
+			Expiration: time.Now().Add(time.Hour),
+		}, nil
+	})
+	var subject string
+	h := (AuthConfig{
+		Mode: "integrated", Verifier: verifier,
+		RequiredScopes: []string{"portico.read", "portico.write"},
+		ResourceMetadataURL: metadataURL,
+	}).Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		subject = SubjectFromContext(r.Context())
+		if r.URL.Query().Get("deny") == "1" {
+			// A downstream denial is not an OAuth scope escalation.
+			w.Header().Set("WWW-Authenticate", `Bearer scope="portico.read portico.write"`)
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	cases := []struct {
+		name, token, target string
+		status int
+		scopeError bool
+	}{
+		{"missing", "", "/mcp", http.StatusUnauthorized, false},
+		{"invalid", "unknown", "/mcp", http.StatusUnauthorized, false},
+		{"reader-missing-write", "reader", "/mcp", http.StatusForbidden, true},
+		{"authorized", "writer", "/mcp", http.StatusNoContent, false},
+		{"downstream-forbidden", "writer", "/mcp?deny=1", http.StatusForbidden, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			subject = ""
+			req := httptest.NewRequest(http.MethodPost, tc.target, nil)
+			if tc.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != tc.status {
+				t.Fatalf("status=%d want=%d", w.Code, tc.status)
+			}
+			challenge := w.Header().Get("WWW-Authenticate")
+			if strings.Contains(challenge, `error="insufficient_scope"`) != tc.scopeError {
+				t.Fatalf("OAuth scope error mismatch: status=%d header=%q", w.Code, challenge)
+			}
+			if tc.scopeError {
+				for _, want := range []string{
+					`Bearer error="insufficient_scope"`,
+					`scope="portico.read portico.write"`,
+					`resource_metadata="` + metadataURL + `"`,
+				} {
+					if !strings.Contains(challenge, want) {
+						t.Fatalf("scope challenge missing %q: %q", want, challenge)
+					}
+				}
+				if strings.Count(challenge, `error="insufficient_scope"`) != 1 {
+					t.Fatalf("scope error parameter duplicated: %q", challenge)
+				}
+			}
+			if tc.status == http.StatusUnauthorized && !strings.Contains(challenge, `resource_metadata="`+metadataURL+`"`) {
+				t.Fatalf("401 missing resource metadata challenge: %q", challenge)
+			}
+			if tc.token == "writer" && subject != "operator-123" {
+				t.Fatalf("valid token lost subject: %q", subject)
+			}
+			if tc.token != "writer" && subject != "" {
+				t.Fatalf("unauthorized token reached downstream handler: %q", subject)
+			}
+		})
+	}
+}
+
 func TestConfiguredVerifierSubject(t *testing.T) {
 	verifier := mcpauth.TokenVerifier(func(context.Context, string, *http.Request) (*mcpauth.TokenInfo, error) {
 		return &mcpauth.TokenInfo{UserID: "subject-123"}, nil
