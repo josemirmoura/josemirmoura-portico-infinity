@@ -9,11 +9,11 @@
     {
       "id": "C01",
       "family": "base",
-      "rule": "JSON-RPC request/response IDs and resultType",
+      "rule": "JSON-RPC 2026 envelope validation, request IDs, resultType and errors",
       "applicability": "MUST",
       "status": "PARTIAL",
-      "evidence": "internal/gateway/gateway.go",
-      "limitation": "SDK path and HTTP integration verified for supported calls; malformed/every result envelope not independently enumerated"
+      "evidence": "internal/gateway/mcp_gate_c_malformed_jsonrpc_test.go",
+      "limitation": "Actual Gateway POST rejects invalid JSON/version/method/params/IDs as structured -32700/-32600/-32602; SDK reports invalid tool arguments with isError=true; all cases assert no Executor invocation. Exhaustive response envelope and schema variants still unproven."
     },
     {
       "id": "C02",
@@ -36,11 +36,11 @@
     {
       "id": "C04",
       "family": "transport",
-      "rule": "POST-only 2026 messages and Content-Type",
+      "rule": "Streamable HTTP POST, valid notification semantics, content-type",
       "applicability": "MUST",
       "status": "PARTIAL",
-      "evidence": "internal/gateway/gateway.go",
-      "limitation": "Request/response POST covered; notification 202 and content negotiation not exhaustive"
+      "evidence": "internal/gateway/mcp_jsonrpc_shape.go",
+      "limitation": "Parser now rejects invalid notification-like messages with structured HTTP 400 instead of SDK 202. Valid extension notifications, Accept negotiation and every Content-Type variant not yet exhaustively proven."
     },
     {
       "id": "C05",
@@ -243,11 +243,11 @@
     {
       "id": "C27",
       "family": "mrtr",
-      "rule": "MRTR requestState integrity and capability checks",
+      "rule": "Optional adaptive MRTR navigation state integrity and client capability checks",
       "applicability": "CONDITIONAL",
       "status": "PARTIAL",
-      "evidence": "internal/gateway/native_approval.go",
-      "limitation": "Optional adaptive presentation; default is external HTTPS, real client negotiation untested"
+      "evidence": "internal/gateway/mcp_gate_c_mrtr_navigation_test.go",
+      "limitation": "Signed invalid/expired/cross-subject/cross-target MRTR states reject before Broker; valid client accept reads approval_status only and cannot grant access. Live client MRTR compatibility, true retry interoperability and operator-authenticated decision need separate evidence."
     },
     {
       "id": "C28",
