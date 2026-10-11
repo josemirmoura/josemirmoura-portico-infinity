@@ -138,12 +138,16 @@ func TestGateCOAuthStatelessRealBrokerFailClosed(t *testing.T) {
 		resp,err:=server.Client().Do(req)
 		if err!=nil { t.Fatal(err) }
 		defer resp.Body.Close()
-		if wantHTTP==0 {
-			if resp.StatusCode!=http.StatusUnauthorized && resp.StatusCode!=http.StatusForbidden {
-				t.Fatalf("insufficient-scope HTTP %d must be 401 or 403",resp.StatusCode)
-			}
-		} else if resp.StatusCode!=wantHTTP {
+		if resp.StatusCode!=wantHTTP {
 			t.Fatalf("tool=%q token category=%q HTTP %d (expected %d)",tool,token,resp.StatusCode,wantHTTP)
+		}
+		if token=="wrong-scope" {
+			challenge:=resp.Header.Get("WWW-Authenticate")
+			if !strings.Contains(challenge,"Bearer") ||
+				!strings.Contains(challenge,"scope=") ||
+				!strings.Contains(challenge,"portico.read") {
+				t.Fatalf("insufficient OAuth scope must return a Bearer scope challenge")
+			}
 		}
 		if resp.StatusCode!=http.StatusOK {
 			_,_ = io.Copy(io.Discard,io.LimitReader(resp.Body,4096))
@@ -167,7 +171,7 @@ func TestGateCOAuthStatelessRealBrokerFailClosed(t *testing.T) {
 	send("","service.restart","vps-agent-test.service","",http.StatusUnauthorized,false)
 	send("inactive","service.restart","vps-agent-test.service","",http.StatusUnauthorized,false)
 	send("wrong-audience","service.restart","vps-agent-test.service","",http.StatusUnauthorized,false)
-	send("wrong-scope","service.restart","vps-agent-test.service","",0,false)
+	send("wrong-scope","service.restart","vps-agent-test.service","",http.StatusForbidden,false)
 	send("valid","service.restart","vps-agent-test.service",
 		"https://attacker.invalid",http.StatusForbidden,false)
 	if services.RestartCount()!=before { t.Fatal("unauthorized request restarted a service") }
