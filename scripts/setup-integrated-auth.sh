@@ -794,11 +794,11 @@ PY
 # container DNS and public-edge hairpin behavior can differ.
 echo "$(vps_agent_text 'Checking secure introspection from Gateway network...' 'Verificando introspecção segura pela rede do Gateway...')"
 if ! "${compose[@]}" run --rm -T --no-deps --entrypoint /bin/sh gateway -ceu '
-    exec curl --noproxy "*" --proto "=https" --max-redirs 0 \\
-        --fail --silent --show-error --connect-timeout 5 --max-time 12 \\
-        --request POST --url "$VPS_AGENT_INTEGRATED_INTROSPECTION_URL" \\
-        --user "$VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_ID:$VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_SECRET" \\
-        --header "Content-Type: application/x-www-form-urlencoded" \\
+    exec curl --noproxy "*" --proto "=https" --max-redirs 0 \
+        --fail --silent --show-error --connect-timeout 5 --max-time 12 \
+        --request POST --url "$VPS_AGENT_INTEGRATED_INTROSPECTION_URL" \
+        --user "$VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_ID:$VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_SECRET" \
+        --header "Content-Type: application/x-www-form-urlencoded" \
         --data "token=deliberately-invalid-safe-preflight"
 ' >"$VPS_AGENT_SETUP_TMP/vps-agent-secure-introspection.json"; then
   echo "$(vps_agent_text 'BLOCKED: Gateway container cannot reach verified HTTPS introspection. Existing services remain unchanged.' 'BLOQUEADO: o contêiner Gateway não alcança a introspecção HTTPS verificada. Os serviços existentes não foram alterados.')" >&2
