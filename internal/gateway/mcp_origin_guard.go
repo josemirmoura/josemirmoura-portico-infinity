@@ -4,6 +4,7 @@ import (
     "net"
     "net/http"
     "net/url"
+    "strconv"
     "strings"
 )
 
@@ -39,9 +40,10 @@ func guardMCPOrigin(resource string, next http.Handler) http.Handler {
                         if r.TLS != nil {
                             scheme = "https"
                         }
-                        valid = got.Scheme == scheme &&
-                            strings.EqualFold(got.Hostname(), authority.Hostname()) &&
-                            got.Port() == authority.Port()
+                        // The Origin wire format omits the default port. Treat
+                        // explicit :80/:443 and an omitted default port as
+                        // the same origin, without trusting a non-loopback Host.
+                        valid = sameMCPOrigin(got, &url.URL{Scheme: scheme, Host: authority.Host})
                     }
                 }
             }
@@ -80,12 +82,43 @@ func parseMCPOrigin(raw string) *url.URL {
     if strings.ContainsAny(u.Host, "@, ") {
         return nil
     }
+    // Disallow invalid port numbers before origin comparison. An omitted port
+    // means 80 (HTTP) or 443 (HTTPS), not the string "".
+    if _, ok := normalizedMCPPort(u); !ok {
+        return nil
+    }
     return u
 }
 
+// normalizedMCPPort follows the scheme/host/port origin triple, rather than
+// comparing the textual port spelling. Browsers omit :80 and :443 in Origin;
+// proxies and OAuth resource URLs may include them explicitly.
+func normalizedMCPPort(u *url.URL) (int, bool) {
+    if u == nil {
+        return 0, false
+    }
+    if u.Port() == "" {
+        switch u.Scheme {
+        case "http":
+            return 80, true
+        case "https":
+            return 443, true
+        default:
+            return 0, false
+        }
+    }
+    n, err := strconv.Atoi(u.Port())
+    return n, err == nil && n >= 1 && n <= 65535
+}
+
 func sameMCPOrigin(a, b *url.URL) bool {
-    return a != nil && b != nil && a.Scheme == b.Scheme &&
-        strings.EqualFold(a.Hostname(), b.Hostname()) && a.Port() == b.Port()
+    if a == nil || b == nil || a.Scheme != b.Scheme ||
+        !strings.EqualFold(a.Hostname(), b.Hostname()) {
+        return false
+    }
+    ap, aok := normalizedMCPPort(a)
+    bp, bok := normalizedMCPPort(b)
+    return aok && bok && ap == bp
 }
 
 func isMCPOriginLoopback(host string) bool {

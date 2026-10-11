@@ -91,7 +91,21 @@ jobs:
               'TestProductionMCPServerDoesNotExposeConformanceFixtures',
               'TestGateCStatelessHTTPRejectsHeaderSpoofingBeforeExecutor',
               'TestGateCOriginAuthorityPreventsDNSRebinding',
+              'TestGateCOriginCanonicalDefaultPortsAtRealHTTPGateway',
+              # Independent audit A1--A5: no fixture catalog, test actual
+              # Gateway and OAuth verifier under Go -race.
+              'TestGateCA1IntrospectionRedirectNeverForwardsCredentials',
+              'TestGateCA1InsecureIntrospectionConfigurationFailsClosed',
+              'TestGateCA1TLSCertificateVerificationCannotBeBypassed',
+              'TestGateCA1TrustAnchoredTLSRoundTrip',
+              'TestGateCA2MCPEncodedNameAgainstRealHandler',
+              'TestGateCA3UnknownHistoricalVersionHasStructuredErrorAndID',
+              'TestGateCA4RateLimitHTTPRealGatewayAndNonToolsUnaffected',
+              'TestGateCA5DuplicateMCPHeadersRejectedInBothOrders',
               'TestGateCOAuthStatelessRealBrokerFailClosed',
+              # Real OAuth -> persistent external approval -> Broker policy,
+              # including deny and revoke, uses only disposable fixtures.
+              'TestOAuthExternalApprovalRealBrokerRoundTrip',
           }
           events = [json.loads(line) for line in Path('evidence/go-protocol-tests.jsonl').read_text().splitlines() if line.strip()]
           passed = {e['Test'] for e in events if e.get('Action') == 'pass' and e.get('Test')}
