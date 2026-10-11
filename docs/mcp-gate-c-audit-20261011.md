@@ -30,7 +30,7 @@ Legend: **P**=PASS, **F**=FAIL, **S**=SKIPPED, **N**=NOT_TESTED. Each row retain
 | 08 | `tools-call-mixed-content` | N | P | **FIXTURE:** synthetic text/image/resource mixed envelope |
 | 09 | `tools-call-error` | N | P | **FIXTURE:** named artificial error tool; normal policy denial tested separately |
 | 10 | `tools-call-with-progress` | N | P | **FIXTURE:** progress token / notifications of synthetic tool; actual production progress capabilities need explicit use-case verification |
-| 11 | `server-sse-multiple-streams` | P | P | **DIRECT:** normal MCP transport streaming passed frozen scenario |
+| 11 | `server-sse-multiple-streams` | P | P | **DIRECT BUT LIMITED:** three concurrent JSON POST responses passed; original checks recorded **zero SSE response streams**. This does not certify streaming, progress or elicitation over SSE |
 | 12 | `resources-list` | P | P | **DIRECT:** normal resources/list; no production `test://` resources |
 | 13 | `resources-read-text` | N | P | **FIXTURE:** expected disposable `test://` text resource not in Community |
 | 14 | `resources-read-binary` | N | P | **FIXTURE:** expected disposable image resource not in Community |
