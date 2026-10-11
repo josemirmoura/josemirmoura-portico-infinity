@@ -38,6 +38,15 @@ fi
 target="https://$domain/oauth/v2/introspect"
 legacy="http://zitadel-auth-internal:8080/oauth/v2/introspect"
 current="${VPS_AGENT_INTEGRATED_INTROSPECTION_URL:-}"
+# Detect concurrent local changes while the disposable network probe runs.
+baseline_sha=""
+if [ "$apply" = 1 ]; then
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "BLOCKED: flock is required for safe update serialization." >&2
+    exit 1
+  fi
+  baseline_sha="$(sha256sum .env | cut -d ' ' -f1)"
+fi
 if [ "$current" != "$legacy" ] && [ "$current" != "$target" ]; then
   echo "BLOCKED: unknown introspection endpoint; do not overwrite custom operator settings." >&2
   exit 1
@@ -97,6 +106,16 @@ fi
 # previous configuration until the operator authorizes a reviewed updater.
 mkdir -p backups
 chmod 700 backups
+# Share the exact lock inode used by scripts/update.sh.
+exec 9< backups
+if ! flock -n 9; then
+  echo "BLOCKED: another update or migration is running." >&2
+  exit 1
+fi
+if [ "$(sha256sum .env | cut -d ' ' -f1)" != "$baseline_sha" ]; then
+  echo "BLOCKED: .env changed while HTTPS preflight ran; no mutation performed." >&2
+  exit 1
+fi
 backup="$(mktemp -d backups/https-introspection.XXXXXXXX)"
 chmod 700 "$backup"
 cp -- .env "$backup/previous.env"
