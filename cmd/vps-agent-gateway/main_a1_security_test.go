@@ -2,6 +2,8 @@ package main
 
 import (
     "bytes"
+    "context"
+    "time"
     "os"
     "os/exec"
     "testing"
@@ -20,7 +22,9 @@ func TestGateCA1DistributedProcessRejectsPlainHTTPIntrospection(t *testing.T) {
         "http://127.0.0.1:18888/oauth/v2/introspect",
     } {
         t.Run(endpoint,func(t *testing.T){
-            cmd:=exec.Command(os.Args[0],"-test.run=^TestGateCA1DistributedProcessRejectsPlainHTTPIntrospection$")
+            ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second)
+            defer cancel()
+            cmd:=exec.CommandContext(ctx,os.Args[0],"-test.run=^TestGateCA1DistributedProcessRejectsPlainHTTPIntrospection$")
             cmd.Env=append(os.Environ(),
                 "PORTICO_A1_HELPER_PROCESS=1",
                 "VPS_AGENT_LISTEN=127.0.0.1:0",
