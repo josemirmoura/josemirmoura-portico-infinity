@@ -84,70 +84,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p evidence
-          # Keep failing protocol regression output visible without uploading internal fixtures.
-          go test -count=1 -run '^TestGateCRealHTTPMalformedJSONRPCNeverReachesExecutor
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          required = {
-              'TestIntegratedOAuthResourceServerBoundaryE2E',
-              'TestMCPCompletionCapabilityIsAbsentAndMethodIsClosed',
-              'TestProductionMCPServerDoesNotExposeConformanceFixtures',
-              'TestGateCStatelessHTTPRejectsHeaderSpoofingBeforeExecutor',
-              'TestGateCOriginAuthorityPreventsDNSRebinding',
-              'TestGateCOriginCanonicalDefaultPortsAtRealHTTPGateway',
-              # Independent audit A1--A5: no fixture catalog, test actual
-              # Gateway and OAuth verifier under Go -race.
-              'TestGateCA1IntrospectionRedirectNeverForwardsCredentials',
-              'TestGateCA1InsecureIntrospectionConfigurationFailsClosed',
-              'TestGateCA1TLSCertificateVerificationCannotBeBypassed',
-              'TestGateCA1TrustAnchoredTLSRoundTrip',
-              'TestGateCA2MCPEncodedNameAgainstRealHandler',
-              'TestGateCA3UnknownHistoricalVersionHasStructuredErrorAndID',
-              'TestGateCA4RateLimitHTTPRealGatewayAndNonToolsUnaffected',
-              'TestGateCA5DuplicateMCPHeadersRejectedInBothOrders',
-              'TestGateCOAuthStatelessRealBrokerFailClosed',
-              # Real OAuth -> persistent external approval -> Broker policy,
-              # including deny and revoke, uses only disposable fixtures.
-              'TestOAuthExternalApprovalRealBrokerRoundTrip',
-              'TestGateCVerifiedHTTPSIntrospectionToBroker',
-              'TestGateCRealProductionToolCatalogSchemas202012',
-              'TestGateCRealGatewayDoesNotAdvertiseDeprecatedUnusedLogging',
-              'TestGateCRealHandlerRequestContextPropagatesDisconnect',
-              'TestGateCRealHTTPMalformedJSONRPCNeverReachesExecutor',
-              'TestGateCMRTRSignedNavigationNeverGrantsAccess',
-          }
-          events = [json.loads(line) for line in Path('evidence/go-protocol-tests.jsonl').read_text().splitlines() if line.strip()]
-          passed = {e['Test'] for e in events if e.get('Action') == 'pass' and e.get('Test')}
-          failed = [e.get('Test') or e.get('Package') for e in events if e.get('Action') == 'fail']
-          skipped = {e['Test'] for e in events if e.get('Action') == 'skip' and e.get('Test') in required}
-          missing = sorted(required - passed)
-          if missing or failed or skipped:
-              raise SystemExit(f'Gate C actual boundary failure: missing={missing} failed={failed} skipped={sorted(skipped)}')
-          summary = {
-              'source_sha': os.environ['GATE_C_SOURCE_SHA'],
-              'required_real_gateway_test_names': sorted(required),
-              'all_required_tests_passed': True,
-              'full_frozen_37_scenario_gate_passed': False,
-              'real_client_and_operator_acceptance_passed': False,
-              'release_gate_c_approved': False,
-              'note': 'Subset production profile evidence; official frozen suite is evaluated independently.'
-          }
-          Path('evidence/community-profile-oauth-broker.json').write_text(json.dumps(summary, indent=2) + '\n')
-          print('Real Gateway OAuth/Broker:', len(required), 'required tests PASS (not release certification)')
-          PY
-      - name: Preserve only structured redacted evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: community-real-mcp-profile-${{ github.run_id }}
-          path: |
-            evidence/community-profile-http.json
-            evidence/community-profile-oauth-broker.json
-          if-no-files-found: warn
-          retention-days: 30
- -v ./internal/gateway
+          go test -count=1 -run TestGateCRealHTTPMalformedJSONRPCNeverReachesExecutor -v ./internal/gateway
+          go test -count=1 -run TestGateCMRTRSignedNavigationNeverGrantsAccess -v ./internal/gateway
           go test -race -count=1 -json ./internal/gateway ./tests/integration > evidence/go-protocol-tests.jsonl
           python3 - <<'PY'
           import json
@@ -179,6 +117,7 @@ jobs:
               'TestGateCRealGatewayDoesNotAdvertiseDeprecatedUnusedLogging',
               'TestGateCRealHandlerRequestContextPropagatesDisconnect',
               'TestGateCRealHTTPMalformedJSONRPCNeverReachesExecutor',
+              'TestGateCMRTRSignedNavigationNeverGrantsAccess',
           }
           events = [json.loads(line) for line in Path('evidence/go-protocol-tests.jsonl').read_text().splitlines() if line.strip()]
           passed = {e['Test'] for e in events if e.get('Action') == 'pass' and e.get('Test')}
