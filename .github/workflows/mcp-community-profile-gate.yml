@@ -6,6 +6,8 @@ on:
       - '.github/workflows/mcp-community-profile-gate.yml'
       - 'scripts/mcp_community_profile_probe.py'
       - 'tests/scripts/test_mcp_community_profile_probe.py'
+      - 'tests/scripts/test_mcp_gate_c_audit_inventory.py'
+      - 'docs/mcp-gate-c-audit-20261011.md'
       - 'internal/gateway/**'
       - 'internal/broker/**'
       - 'internal/ipc/**'
@@ -38,6 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s tests/scripts -p 'test_mcp_community_profile_probe.py' -v
+          python3 -m unittest discover -s tests/scripts -p 'test_mcp_gate_c_audit_inventory.py' -v
           python3 -m py_compile scripts/mcp_community_profile_probe.py
       - name: Build normal Gateway binary WITHOUT conformance fixture build tags
         run: |
