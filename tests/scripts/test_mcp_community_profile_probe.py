@@ -34,7 +34,7 @@ class FakeGateway:
                 return err(400, -32602)
             return ok({"supportedVersions": ["2026-07-28"], "capabilities": self.capabilities})
         if method == "tools/list":
-            return ok({"tools": [{"name": n} for n in self.tools]})
+            return ok({"tools": [{"name": n, "inputSchema": {"type": "object"}} for n in self.tools]})
         if method == "prompts/list":
             return ok({"prompts": []})
         if method == "resources/list":
@@ -71,6 +71,25 @@ class CommunityProfileProbeTests(unittest.TestCase):
         f.capabilities["tools"]["listChanged"] = True
         with self.assertRaisesRegex(module.ProfileFailure, "unreviewed optional"):
             self.run_fixture(f)
+
+    def test_unused_deprecated_logging_announcement_is_blocked(self):
+        f = FakeGateway()
+        f.capabilities["logging"] = {}
+        with self.assertRaisesRegex(module.ProfileFailure, "logging"):
+            self.run_fixture(f)
+
+    def test_tool_schema_missing_root_is_blocked(self):
+        f = FakeGateway()
+        original = f.rpc
+        def malformed(url, method, params, ident, *, origin=None):
+            if method == "tools/list":
+                return 200, {"jsonrpc": "2.0", "id":ident, "result":{
+                    "tools":[{"name":"system.info","inputSchema":{"type":"array"}}]
+                }}
+            return original(url,method,params,ident,origin=origin)
+        with patch.object(module,"rpc",side_effect=malformed):
+            with self.assertRaisesRegex(module.ProfileFailure,"inputSchema"):
+                module.probe(URL)
 
     def test_fake_test_tool_is_blocked(self):
         f = FakeGateway()

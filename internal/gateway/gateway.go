@@ -311,7 +311,9 @@ func newMCPServer(exec Executor, metrics *runtimeMetrics) *mcp.Server {
 		&mcp.ServerOptions{
 			Instructions: serverInstructions(),
 			Capabilities: &mcp.ServerCapabilities{
-				Logging:    &mcp.LoggingCapabilities{},
+				// MCP request-scoped logging is deprecated in 2026-07-28.
+				// Portico does not emit client logging notifications: do not
+				// advertise unused logging. Broker audit and runtime logs remain.
 				Extensions: approvalServerExtensions(),
 				// The SDK serves prompts/list with an empty list even when no
 				// prompts are registered. Keep discovery consistent with that

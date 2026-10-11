@@ -105,6 +105,8 @@ def probe(url: str) -> dict:
 
     # Preserve a truthful static profile. Any capability expansion requires a
     # real implementation and new security tests before advertisement.
+    if "logging" in caps:
+        raise ProfileFailure("deprecated unused MCP logging capability advertised")
     if "completions" in caps or any(
         isinstance(caps.get(section), dict) and caps[section].get("listChanged")
         for section in ("tools", "prompts", "resources")
@@ -128,6 +130,12 @@ def probe(url: str) -> dict:
             name = record["name"]
             if is_synthetic(name):
                 raise ProfileFailure("synthetic diagnostic tool exposed in production catalog")
+            input_schema = record.get("inputSchema")
+            if not isinstance(input_schema, dict) or input_schema.get("type") != "object":
+                raise ProfileFailure("production tool missing object-rooted inputSchema")
+            output_schema = record.get("outputSchema")
+            if output_schema is not None and not isinstance(output_schema, dict):
+                raise ProfileFailure("production tool has non-object outputSchema descriptor")
             if name in tools:
                 raise ProfileFailure("duplicate tool in paginated catalog")
             tools.append(name)
