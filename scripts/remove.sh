@@ -54,6 +54,65 @@ fi
 
 repo_root="$PWD"
 
+# BEGIN REMOVE PROJECT OWNERSHIP GUARD
+# The bundled removal script acts on a fixed Docker project and identity volumes.
+# A copied checkout MUST NOT stop or delete another installation's resources.
+if [ "${COMPOSE_PROJECT_NAME:-mcp-vps-agent}" != "mcp-vps-agent" ]; then
+  echo "REMOVE BLOCKED: removal supports only the canonical mcp-vps-agent Compose project." >&2
+  exit 1
+fi
+owned_project_ids="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)" || {
+  echo "REMOVE BLOCKED: cannot inspect existing Docker project ownership." >&2
+  exit 1
+}
+if [ -n "$owned_project_ids" ]; then
+  canonical_checkout="$(pwd -P)"
+  while IFS= read -r project_container_id; do
+    [ -n "$project_container_id" ] || continue
+    if [[ ! "$project_container_id" =~ ^[0-9a-f]{12,64}$ ]]; then
+      echo "REMOVE BLOCKED: unexpected Docker project container identity." >&2
+      exit 1
+    fi
+    owner_checkout="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$project_container_id")" || {
+      echo "REMOVE BLOCKED: cannot verify Docker checkout ownership." >&2
+      exit 1
+    }
+    owner_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$project_container_id")" || {
+      echo "REMOVE BLOCKED: cannot verify Docker project label." >&2
+      exit 1
+    }
+    if [ "$owner_checkout" != "$canonical_checkout" ] || [ "$owner_project" != "mcp-vps-agent" ]; then
+      echo "REMOVE BLOCKED: Docker resources belong to another checkout or project." >&2
+      exit 1
+    fi
+  done <<< "$owned_project_ids"
+fi
+
+# An empty container list cannot prove absence of installation resources.
+# Purge also deletes fixed-name volumes, Compose networks and image tags.
+# Without a container proving checkout ownership, refuse orphaned resources.
+if [ -z "$owned_project_ids" ] && [ "$mode" = "--purge" ]; then
+  orphan_volumes="$(docker volume ls --format '{{.Name}}')" || {
+    echo "REMOVE BLOCKED: cannot inspect Docker volumes for orphan ownership." >&2
+    exit 1
+  }
+  orphan_networks="$(docker network ls --format '{{.Name}}')" || {
+    echo "REMOVE BLOCKED: cannot inspect Docker networks for orphan ownership." >&2
+    exit 1
+  }
+  local_images="$(docker image ls --format '{{.Repository}}:{{.Tag}}')" || {
+    echo "REMOVE BLOCKED: cannot inspect Docker images for orphan ownership." >&2
+    exit 1
+  }
+  if printf '%s\n' "$orphan_volumes" | grep -Eq '^mcp-vps-agent_' ||
+     printf '%s\n' "$orphan_networks" | grep -Eq '^mcp-vps-agent([_-]|$)' ||
+     printf '%s\n' "$local_images" | grep -Eq '^mcp-vps-agent-(gateway|broker):local$'; then
+    echo "REMOVE BLOCKED: Pórtico Docker resources remain without an owning container; manual ownership verification required before purge." >&2
+    exit 1
+  fi
+fi
+# END REMOVE PROJECT OWNERSHIP GUARD
+
 remove_legacy_sandbox() {
   [ -d /opt/vps-agent-sandbox ] || return 0
   if rmdir /opt/vps-agent-sandbox >/dev/null 2>&1; then

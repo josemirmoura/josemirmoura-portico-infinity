@@ -1,0 +1,334 @@
+{
+  "schema_version": 1,
+  "protocol_revision": "2026-07-28",
+  "pinned_upstream": "c37eec888e1c6ff140af79987a40008548b7cc5f",
+  "scope": "Portico Community 1 chat to 1 Linux Scoped; normal executable, no synthetic test tools",
+  "meaning": "LAB_PASS = focused disposable evidence only. Does not mean universal MCP conformance. PARTIAL/NOT_PROVEN/REAL_ENV_PENDING/RAW_FAIL explicitly block blanket compliance.",
+  "freeze_rule": "Release gate remains BLOCKED absent independent review, target HTTPS OAuth evidence, and normatively justified applicability acceptance; the 37-scenario raw upstream result must be retained as-is.",
+  "controls": [
+    {
+      "id": "C01",
+      "family": "base",
+      "rule": "JSON-RPC 2026 envelope validation, request IDs, resultType and errors",
+      "applicability": "MUST",
+      "status": "PARTIAL",
+      "evidence": "internal/gateway/mcp_gate_c_malformed_jsonrpc_test.go",
+      "limitation": "Actual Gateway POST rejects invalid JSON/version/method/params/IDs as structured -32700/-32600/-32602; SDK reports invalid tool arguments with isError=true; all cases assert no Executor invocation. Exhaustive response envelope and schema variants still unproven."
+    },
+    {
+      "id": "C02",
+      "family": "base",
+      "rule": "Per-request stateless _meta and client information",
+      "applicability": "MUST",
+      "status": "LAB_PASS",
+      "evidence": "internal/gateway/mcp_gate_c_stateless_negative_test.go",
+      "limitation": "Reject missing metadata; no conversation-based implicit authorization"
+    },
+    {
+      "id": "C03",
+      "family": "version",
+      "rule": "Protocol version mismatch and historical unsupported versions",
+      "applicability": "MUST",
+      "status": "LAB_PASS",
+      "evidence": "internal/gateway/mcp_transport_compat_test.go",
+      "limitation": "Structured -32022 supported/requested and original JSON-RPC ID"
+    },
+    {
+      "id": "C04",
+      "family": "transport",
+      "rule": "Streamable HTTP POST, valid notification semantics, content-type",
+      "applicability": "MUST",
+      "status": "PARTIAL",
+      "evidence": "internal/gateway/mcp_jsonrpc_shape.go",
+      "limitation": "Parser now rejects invalid notification-like messages with structured HTTP 400 instead of SDK 202. Valid extension notifications, Accept negotiation and every Content-Type variant not yet exhaustively proven."
+    },
+    {
+      "id": "C05",
+      "family": "transport",
+      "rule": "Mcp-Method and Mcp-Name/body header matching",
+      "applicability": "MUST",
+      "status": "LAB_PASS",
+      "evidence": "internal/gateway/mcp_gate_c_stateless_negative_test.go",
+      "limitation": "Forged metadata does not reach executor"
+    },
+    {
+      "id": "C06",
+      "family": "transport",
+      "rule": "Mcp-Name Base64 encoding and invalid sentinel",
+      "applicability": "MUST",
+      "status": "LAB_PASS",
+      "evidence": "internal/gateway/mcp_transport_compat_test.go",
+      "limitation": "Encoded name matched against body on actual Handler"
+    },
+    {
+      "id": "C07",
+      "family": "transport",
+      "rule": "Duplicate scalar header ambiguity",
+      "applicability": "MUST_SECURITY",
+      "status": "LAB_PASS",
+      "evidence": "internal/gateway/mcp_transport_compat_test.go",
+      "limitation": "Conflicting or repeated MCP headers fail closed"
+    },
+    {
+      "id": "C08",
+      "family": "transport",
+      "rule": "Mcp-Param annotations and mirrors",
+      "applicability": "CONDITIONAL",
+      "status": "NOT_ADVERTISED",
+      "evidence": "internal/gateway/gateway.go",
+      "limitation": "No product x-mcp-header parameter annotations claimed; verify complete schema inventory"
+    },
+    {
+      "id": "C09",
+      "family": "transport",
+      "rule": "Origin 403 on invalid browser origin",
+      "applicability": "MUST",
+      "status": "LAB_PASS",
+      "evidence": "internal/gateway/mcp_origin_guard_test.go",
+      "limitation": "Hostile, malformed, duplicated and host-rebinding Origin rejected"
+    },
+    {
+      "id": "C10",
+      "family": "transport",
+      "rule": "Implicit and explicit HTTP(S) default port in Origin",
+      "applicability": "MUST",
+      "status": "LAB_PASS",
+      "evidence": "internal/gateway/mcp_origin_default_port_test.go",
+      "limitation": "Trusted resource origin scheme/host/effective-port; invalid port refused"
+    },
+    {
+      "id": "C11",
+      "family": "transport",
+      "rule": "Independent stateless HTTP POST requests",
+      "applicability": "MUST",
+      "status": "LAB_PASS",
+      "evidence": "internal/gateway/mcp_gate_c_stateless_negative_test.go",
+      "limitation": "No legacy MCP session token required"
+    },
+    {
+      "id": "C12",
+      "family": "transport",
+      "rule": "Cancellation propagation and no further SSE events",
+      "applicability": "MUST_CONDITIONAL",
+      "status": "PARTIAL",
+      "evidence": "internal/gateway/mcp_gate_c_cancellation_test.go",
+      "limitation": "Actual Streamable HTTP Handler passes client request-context cancellation to in-flight Executor, with no privileged Broker effects. SSE-stream close not applicable to JSONResponse profile; cancellation of a remote Broker side effect under timeout requires separate proof."
+    },
+    {
+      "id": "C13",
+      "family": "transport",
+      "rule": "Optional SSE per-request response vs JSON profile",
+      "applicability": "CONDITIONAL",
+      "status": "NOT_ADVERTISED",
+      "evidence": "internal/gateway/gateway.go",
+      "limitation": "2026 Streamable HTTP accepts either JSON or request-scoped SSE; Community sets JSONResponse=true. SSE streaming is not claimed. Cancellation under load remains C12."
+    },
+    {
+      "id": "C14",
+      "family": "transport",
+      "rule": "Subscriptions/listen stream behavior",
+      "applicability": "CONDITIONAL",
+      "status": "NOT_PROVEN",
+      "evidence": "internal/gateway/gateway.go",
+      "limitation": "Do not claim dynamic list notifications without demonstrated subscription semantics"
+    },
+    {
+      "id": "C15",
+      "family": "oauth",
+      "rule": "OAuth protected resource metadata",
+      "applicability": "MUST_IF_OAUTH",
+      "status": "LAB_PASS",
+      "evidence": "tests/integration/mcp_https_oauth_broker_contract_test.go",
+      "limitation": "TLS endpoint returns resource and issuer; synthetic provider"
+    },
+    {
+      "id": "C16",
+      "family": "oauth",
+      "rule": "401 bearer challenge with resource_metadata",
+      "applicability": "MUST_IF_OAUTH",
+      "status": "LAB_PASS",
+      "evidence": "tests/integration/mcp_https_oauth_broker_contract_test.go",
+      "limitation": "Missing bearer cannot reach Broker; client discovery verified in fixture"
+    },
+    {
+      "id": "C17",
+      "family": "oauth",
+      "rule": "Verified TLS for OAuth introspection",
+      "applicability": "MUST_IF_OAUTH",
+      "status": "LAB_PASS",
+      "evidence": "tests/integration/mcp_https_oauth_broker_contract_test.go",
+      "limitation": "Child process certificate trust; real Docker/VPS introspection remains UNVALIDATED"
+    },
+    {
+      "id": "C18",
+      "family": "oauth",
+      "rule": "No introspection 302/307 redirects or environment proxy",
+      "applicability": "MUST_SECURITY",
+      "status": "LAB_PASS",
+      "evidence": "internal/gateway/introspection_transport_security_test.go",
+      "limitation": "Verified credentials never redirected to another server"
+    },
+    {
+      "id": "C19",
+      "family": "oauth",
+      "rule": "Invalid certificate and HTTP Docker hostname fail closed",
+      "applicability": "MUST_SECURITY",
+      "status": "LAB_PASS",
+      "evidence": "internal/gateway/introspection_transport_security_test.go",
+      "limitation": "Only numeric loopback fixtures can use plaintext HTTP"
+    },
+    {
+      "id": "C20",
+      "family": "oauth",
+      "rule": "Token issuer/audience/expiration and exact scopes",
+      "applicability": "MUST_IF_OAUTH",
+      "status": "LAB_PASS",
+      "evidence": "tests/integration/mcp_oauth_broker_gate_c_test.go",
+      "limitation": "Negative and positive OAuth→Broker fixture, not production ZITADEL"
+    },
+    {
+      "id": "C21",
+      "family": "oauth",
+      "rule": "OAuth subject isolation through IPC/Broker",
+      "applicability": "MUST_SECURITY",
+      "status": "LAB_PASS",
+      "evidence": "tests/integration/mcp_oauth_external_approval_test.go",
+      "limitation": "Subject propagation and pending grants isolate principals in fixture"
+    },
+    {
+      "id": "C22",
+      "family": "tools",
+      "rule": "tools/list complete, no test-only diagnostics in product",
+      "applicability": "MUST_IF_TOOLS",
+      "status": "LAB_PASS",
+      "evidence": "internal/gateway/mcp_gate_c_catalog_schema_test.go",
+      "limitation": "Real Gateway tools/list catalog checked twice for stable order, unique names and descriptor schemas; synthetic conformance names excluded in production profile probe."
+    },
+    {
+      "id": "C23",
+      "family": "tools",
+      "rule": "tool input schema validation and bounded responses",
+      "applicability": "MUST_IF_TOOLS",
+      "status": "PARTIAL",
+      "evidence": "internal/gateway/mcp_gate_c_catalog_schema_test.go",
+      "limitation": "Actual tools/list all descriptors resolved against local JSON Schema 2020-12; outputSchema tested with system.info structured result. Runtime rejection and other structured outputs remain PARTIAL."
+    },
+    {
+      "id": "C24",
+      "family": "tools",
+      "rule": "rate limit invocations per subject and global",
+      "applicability": "MUST_IF_TOOLS",
+      "status": "LAB_PASS",
+      "evidence": "internal/gateway/tool_rate_limit_test.go",
+      "limitation": "Temporal bucket and HTTP 429 with Retry-After"
+    },
+    {
+      "id": "C25",
+      "family": "tools",
+      "rule": "Broker Scoped policy is authoritative",
+      "applicability": "PRODUCT_SECURITY",
+      "status": "LAB_PASS",
+      "evidence": "tests/integration/mcp_https_oauth_broker_contract_test.go",
+      "limitation": "TLS bearer cannot read outside permitted root, even when authenticated"
+    },
+    {
+      "id": "C26",
+      "family": "approval",
+      "rule": "Operator grant requires independent authenticated decision",
+      "applicability": "PRODUCT_SECURITY",
+      "status": "LAB_PASS",
+      "evidence": "tests/integration/mcp_oauth_external_approval_test.go",
+      "limitation": "Pending never grants; fixture approve/deny/revoke; real human/browser pending"
+    },
+    {
+      "id": "C27",
+      "family": "mrtr",
+      "rule": "Optional adaptive MRTR navigation state integrity and client capability checks",
+      "applicability": "CONDITIONAL",
+      "status": "PARTIAL",
+      "evidence": "internal/gateway/mcp_gate_c_mrtr_navigation_test.go",
+      "limitation": "Signed invalid/expired/cross-subject/cross-target MRTR states reject before Broker; valid client accept reads approval_status only and cannot grant access. Live client MRTR compatibility, true retry interoperability and operator-authenticated decision need separate evidence."
+    },
+    {
+      "id": "C28",
+      "family": "resources",
+      "rule": "resources/list and resource-not-found responses",
+      "applicability": "MUST_IF_RESOURCES",
+      "status": "LAB_PASS",
+      "evidence": "scripts/mcp_community_profile_probe.py",
+      "limitation": "No real production synthetic resource tools"
+    },
+    {
+      "id": "C29",
+      "family": "prompts",
+      "rule": "prompts/list and advertised static prompt capability",
+      "applicability": "MUST_IF_PROMPTS",
+      "status": "LAB_PASS",
+      "evidence": "internal/gateway/gateway.go",
+      "limitation": "Empty catalog permitted; no promises of listChanged"
+    },
+    {
+      "id": "C30",
+      "family": "completions",
+      "rule": "completion/complete",
+      "applicability": "OPTIONAL",
+      "status": "NOT_ADVERTISED",
+      "evidence": "docs/mcp-gate-c-audit-20261011.md",
+      "limitation": "Frozen official runner calls optional method even though not advertised; preserve FAIL"
+    },
+    {
+      "id": "C31",
+      "family": "logging",
+      "rule": "Deprecated optional MCP logging capability not advertised",
+      "applicability": "OPTIONAL",
+      "status": "NOT_ADVERTISED",
+      "evidence": "internal/gateway/mcp_gate_c_catalog_schema_test.go",
+      "limitation": "2026-07-28 logging is deprecated; request-scoped notifications/message not emitted. No obsolete logging/setLevel obligation. Broker audit and runtime observability are separate."
+    },
+    {
+      "id": "C32",
+      "family": "schema",
+      "rule": "JSON Schema 2020-12 and output-schema dialect",
+      "applicability": "MUST_IF_SCHEMA",
+      "status": "PARTIAL",
+      "evidence": "internal/gateway/mcp_gate_c_catalog_schema_test.go",
+      "limitation": "All current input/output catalog schemas resolved offline with local refs as JSON Schema 2020-12. Runtime validation of arbitrary composition and conditionals, and structuredContent for every tool, not exhaustively proven."
+    },
+    {
+      "id": "C33",
+      "family": "integration",
+      "rule": "Real ChatGPT OAuth and operator HTTPS browser grant",
+      "applicability": "REAL_WORLD_GATE",
+      "status": "REAL_ENV_PENDING",
+      "evidence": "docs/mcp-community-profile-gate.md",
+      "limitation": "Owner/real client approval is separate Gate E"
+    },
+    {
+      "id": "C34",
+      "family": "integration",
+      "rule": "Real target Docker/Traefik HTTPS backchannel + rollback",
+      "applicability": "REAL_WORLD_GATE",
+      "status": "REAL_ENV_PENDING",
+      "evidence": "scripts/prepare-https-introspection.sh",
+      "limitation": "Disposable TLS tests do not assert real CA, hostname, deployment or rollback"
+    },
+    {
+      "id": "C35",
+      "family": "review",
+      "rule": "Independent normative reviewer signoff on exact release SHA",
+      "applicability": "RELEASE_GATE",
+      "status": "REAL_ENV_PENDING",
+      "evidence": "docs/mcp-gate-c-audit-20261011.md",
+      "limitation": "Implementer cannot sign own review; issue #130 remains open"
+    },
+    {
+      "id": "C36",
+      "family": "official",
+      "rule": "Raw 37 scenario frozen upstream score, no waivers",
+      "applicability": "RELEASE_EVIDENCE",
+      "status": "RAW_FAIL",
+      "evidence": "scripts/mcp_conformance_matrix.py",
+      "limitation": "Normal 8/2/3/24; synthetic lab 35/1/1/0 at last evidenced SHA; both release_gate_passed=false"
+    }
+  ]
+}

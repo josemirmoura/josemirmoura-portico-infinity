@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode"
 
+	portico "github.com/josemirmoura/mcp-vps-agent-gateway"
 	"github.com/josemirmoura/mcp-vps-agent-gateway/internal/gateway"
 	"github.com/josemirmoura/mcp-vps-agent-gateway/internal/ipc"
 	"github.com/josemirmoura/mcp-vps-agent-gateway/internal/securefs"
@@ -58,6 +59,8 @@ func main() {
 		InstanceID:           os.Getenv("VPS_AGENT_INSTANCE_ID"),
 		InstanceName:         getenv("VPS_AGENT_INSTANCE_NAME", "vps-agent"),
 		MaxConcurrentRequests: getenvInt("VPS_AGENT_MAX_CONCURRENT_REQUESTS", 64),
+		ToolCallsPerSecond: getenvInt("VPS_AGENT_TOOL_CALLS_PER_SECOND", 20),
+		ToolCallBurst: getenvInt("VPS_AGENT_TOOL_CALL_BURST", 60),
 	}
 	if issuer != "" {
 		authCfg.AuthorizationServers = []string{issuer}
@@ -74,6 +77,14 @@ func main() {
 			slog.Error("integrated_auth_config_invalid", "reason", "OAuth resource/public URL and issuer required"); os.Exit(1)
 		}
 		introspectionURL := os.Getenv("VPS_AGENT_INTEGRATED_INTROSPECTION_URL")
+		// The released Gateway must never use a plaintext introspection
+		// endpoint. Internal numeric-loopback HTTP is permitted only by
+		// disposable unit tests that construct NewIntegratedOIDCVerifier directly.
+		introspectionTarget, parseErr := url.Parse(introspectionURL)
+		if parseErr != nil || introspectionTarget == nil || introspectionTarget.Scheme != "https" {
+			slog.Error("integrated_auth_config_invalid", "reason", "HTTPS introspection URL required for distributed Gateway")
+			os.Exit(1)
+		}
 		introspectionHost := os.Getenv("VPS_AGENT_INTEGRATED_INTROSPECTION_HOST")
 		introspectionClientID := os.Getenv("VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_ID")
 		introspectionClientSecret := os.Getenv("VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_SECRET")
@@ -101,7 +112,7 @@ func main() {
 		WriteTimeout:      0, // Streamable HTTP may legitimately outlive a normal request timeout.
 		IdleTimeout:       2 * time.Minute,
 	}
-	slog.Info("gateway_start", "listen", listen, "auth_mode", authCfg.Mode, "instance_id", authCfg.InstanceID, "instance_name", authCfg.InstanceName)
+	slog.Info("gateway_start", "product_version", portico.Version(), "listen", listen, "auth_mode", authCfg.Mode, "instance_id", authCfg.InstanceID, "instance_name", authCfg.InstanceName)
 	if err := srv.ListenAndServe(); err != nil { slog.Error("gateway_exit", "error", err); os.Exit(1) }
 }
 
