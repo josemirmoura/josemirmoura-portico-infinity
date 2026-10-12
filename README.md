@@ -60,7 +60,7 @@ Core properties:
 For the current supported path:
 
 - Linux host; Ubuntu 24.04 LTS is the release-candidate validated target;
-- Docker Engine 24+ and Docker Compose v2;
+- Docker Engine 24+ and Docker Compose v2/v5;
 - Git, OpenSSL, Python 3 and curl;
 - public DNS + valid HTTPS for the MCP endpoint;
 - a compatible web AI/MCP client with the required custom MCP capability available.
