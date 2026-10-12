@@ -558,12 +558,11 @@ PY
   unset PASSWORD PASSWORD2 2>/dev/null || true
 
   echo "$(vps_agent_text 'Creating the dedicated non-admin Portico operator identity...' 'Criando a identidade dedicada e não administrativa do operador Portico...')"
+  # The curl process runs in an ephemeral container: host-only temporary
+  # paths are invisible there, so discard the unused POST body inside it.
   set +e
   HTTP_CODE="$(
     curl_zitadel_internal \
-      # The curl process runs inside an ephemeral container. Never direct
-      # --output to a host-only temporary path that is not mounted there.
-      # The POST response body is not consumed by this bootstrap flow.
       --output /dev/null \
       --write-out '%{http_code}' \
       --request POST \
