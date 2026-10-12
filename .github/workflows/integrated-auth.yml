@@ -255,7 +255,7 @@ jobs:
           set -euo pipefail
           lab="$(mktemp -d /tmp/portico-zitadel-https.XXXXXXXX)"
           chmod 700 "$lab"
-          trap 'COMPOSE_PROJECT_NAME=portico-gate-c-migration docker compose -f "$lab/migrate/compose.yaml" -f "$lab/migrate/compose.integrated-auth.yaml" --project-directory "$lab/migrate" down -v --remove-orphans >/dev/null 2>&1 || true; docker rm -f portico-ci-real-gateway portico-ci-zitadel-tls >/dev/null 2>&1 || true; rm -rf -- "$lab"' EXIT
+          trap 'COMPOSE_PROJECT_NAME=portico-gate-c-migration docker compose -f "$lab/migrate/compose.yaml" -f "$lab/migrate/compose.integrated-auth.yaml" --project-directory "$lab/migrate" down -v --remove-orphans >/dev/null 2>&1 || true; docker rm -f portico-ci-e2e-gateway portico-ci-e2e-broker portico-ci-real-gateway portico-ci-zitadel-tls >/dev/null 2>&1 || true; sudo rm -rf -- "$lab"' EXIT
 
           # No host-published ports, Docker socket, operator credentials or external
           # mounts. Reuse only the already disposable ZITADEL/Postgres CI network.
@@ -548,7 +548,187 @@ jobs:
           echo "GATE_C_REAL_ZITADEL_ENV_MIGRATION_RESTORE_OK (config backup only; not signed-RC rollback)"
 
 
+
+          # Single-path disposable E2E: ZITADEL real -> trusted HTTPS
+          # -> distributed Gateway -> Unix peer-credential IPC -> real Broker
+          # -> Scoped filesystem + audit. No host root or Docker socket.
+          mkdir -p "$lab/socket" "$lab/broker-state" "$lab/scope"
+          printf 'real-scope-e2e-marker\n' > "$lab/scope/allowed.txt"
+          cat > "$lab/broker-policy.yaml" <<'YAML'
+          version: 1
+          mode: scoped
+          features:
+            full_mode_enabled: false
+          filesystem:
+            read: [/lab/scope]
+            write: [/lab/scope]
+            actions: [read, write, list, stat]
+          network:
+            mode: blocked
+            destinations: []
+          shell:
+            enabled: false
+            cwd_roots: []
+          privilege:
+            admin: broker-only
+          replay:
+            require_idempotency_for_safe_writes: true
+            blind_retry_non_replay_safe: false
+          grant:
+            required: true
+            max_ttl_minutes: 5
+          YAML
+          sudo chown 0:65532 "$lab/broker-policy.yaml"
+          sudo chmod 0640 "$lab/broker-policy.yaml"
+          sudo chown -R 0:65532 "$lab/socket" "$lab/broker-state" "$lab/scope"
+          sudo chmod 0770 "$lab/socket" "$lab/broker-state" "$lab/scope"
+          test "$(stat -c %a "$lab/broker-policy.yaml")" = 640
+          broker_subject="$(python3 - <<'PY'
+          import json
+          print(json.load(open("/tmp/probe-token-introspection.json",encoding="utf-8"))["sub"])
+          PY
+          )"
+          test -n "$broker_subject"
+          broker_admin="$(openssl rand -hex 32)"
+          echo "::add-mask::$broker_admin"
+          docker build --quiet --target broker -t portico-gate-c-real-broker:disposable . >/dev/null
+          docker run -d --rm --name portico-ci-e2e-broker \
+            --network none --user 0:65532 \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --mount "type=bind,src=$lab/broker-policy.yaml,dst=/etc/vps-agent/policy.yaml,readonly" \
+            --mount "type=bind,src=$lab/socket,dst=/run/vps-agent" \
+            --mount "type=bind,src=$lab/broker-state,dst=/var/lib/vps-agent" \
+            --mount "type=bind,src=$lab/scope,dst=/lab/scope" \
+            -e VPS_AGENT_POLICY=/etc/vps-agent/policy.yaml \
+            -e VPS_AGENT_BROKER_SOCKET=/run/vps-agent/broker.sock \
+            -e VPS_AGENT_STATE_DB=/var/lib/vps-agent/state.db \
+            -e VPS_AGENT_PHYSICAL_SCOPE_ROOT=/lab/scope \
+            -e VPS_AGENT_EXPECTED_SUBJECT="$broker_subject" \
+            -e VPS_AGENT_ADMIN_TOKEN="$broker_admin" \
+            portico-gate-c-real-broker:disposable >/dev/null
+          ready=0
+          for _ in $(seq 1 60); do
+            if sudo test -S "$lab/socket/broker.sock"; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" = 1 || {
+            docker logs --tail 40 portico-ci-e2e-broker | sed -E 's/("token"|"secret")[^,]*/REDACTED/g' >&2
+            exit 1
+          }
+          docker run -d --rm --name portico-ci-e2e-gateway \
+            --network ci-edge --read-only --user 65532:65532 \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,size=16777216 \
+            --mount "type=bind,src=$lab/ca.pem,dst=/tmp/disposable-ca.pem,readonly" \
+            --mount "type=bind,src=$lab/socket,dst=/run/vps-agent,readonly" \
+            --env-file "$lab/gateway.env" \
+            -e VPS_AGENT_BROKER_SOCKET=/run/vps-agent/broker.sock \
+            portico-gate-c-real-gateway:disposable >/dev/null
+          cat > "$lab/unified-probe.py" <<'PY'
+          import json,time,urllib.error,urllib.request
+          token=json.load(open("/pki/probe-token.json",encoding="utf-8"))["access_token"]
+          endpoint="http://portico-ci-e2e-gateway:8080/mcp"
+          client=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          def send(name,args=None,bearer=token):
+              params={"name":name,"arguments":args or {},
+                  "_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                      "io.modelcontextprotocol/clientInfo":{"name":"disposable-e2e","version":"1"},
+                      "io.modelcontextprotocol/clientCapabilities":{}}}
+              request=urllib.request.Request(endpoint,data=json.dumps({
+                  "jsonrpc":"2.0","id":9,"method":"tools/call","params":params
+              }).encode(),headers={
+                  "Content-Type":"application/json",
+                  "Accept":"application/json, text/event-stream",
+                  "MCP-Protocol-Version":"2026-07-28",
+                  "Mcp-Method":"tools/call",
+                  "Mcp-Name":name,
+                  "Authorization":"Bearer "+bearer},method="POST")
+              with client.open(request,timeout=15) as resp:
+                  assert resp.status == 200, resp.status
+                  doc=json.load(resp)
+                  assert not doc.get("error"), "JSON-RPC error"
+                  return doc["result"]
+          for attempt in range(60):
+              try:
+                  ready=send("system.info")
+                  assert ready.get("isError") is not True
+                  break
+              except (OSError,urllib.error.URLError):
+                  if attempt==59: raise
+                  time.sleep(1)
+          allowed=send("file.read",{"path":"/lab/scope/allowed.txt"})
+          assert allowed.get("isError") is not True, "Broker read rejected"
+          assert "real-scope-e2e-marker" in json.dumps(allowed), "did not read scoped fixture"
+          forbidden=send("file.read",{"path":"/etc/shadow"})
+          assert forbidden.get("isError") is True, "Broker read escaped scope"
+          written=send("file.write",{"path":"/lab/scope/written.txt",
+                  "content":"e2e-real-zitadel-broker"})
+          assert written.get("isError") is not True, "Broker write rejected"
+          denied=send("file.write",{"path":"/etc/outside-e2e.txt","content":"must-not-exist"})
+          assert denied.get("isError") is True, "Broker write escaped scope"
+          for bearer in ("definitely-invalid-token",):
+              req=urllib.request.Request(endpoint,data=b'{"jsonrpc":"2.0","id":10,"method":"tools/list"}',
+                  headers={"Content-Type":"application/json",
+                      "Accept":"application/json, text/event-stream",
+                      "Authorization":"Bearer "+bearer},method="POST")
+              try:
+                  client.open(req,timeout=8)
+                  raise AssertionError("invalid token authorized")
+              except urllib.error.HTTPError as error:
+                  assert error.code==401, error.code
+          print("GATE_C_UNIFIED_REAL_OAUTH_GATEWAY_BROKER_SCOPED_OK")
+          PY
+          docker run --rm --network ci-edge \
+            --user "$(id -u):$(id -g)" \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --mount "type=bind,src=$lab,dst=/pki,readonly" \
+            python:3.12-slim-bookworm python3 /pki/unified-probe.py
+          sudo grep -qx 'e2e-real-zitadel-broker' "$lab/scope/written.txt"
+          docker exec portico-ci-e2e-broker \
+            /usr/local/bin/vps-agent audit-status \
+            --socket /run/vps-agent/broker.sock > "$lab/audit.json"
+          python3 - "$lab/audit.json" <<'PY'
+          import json,sys
+          doc=json.load(open(sys.argv[1],encoding="utf-8"))
+          assert doc["ok"] is True, "Broker audit status failed"
+          info=doc["result"]
+          assert info["valid"] is True, "Broker audit chain invalid"
+          assert info["events"]>=4, "expected real MCP operations missing from audit"
+          print("GATE_C_UNIFIED_REAL_BROKER_AUDIT_OK")
+          PY
+          python3 - "$RUNNER_TEMP/portico-e2e-evidence.json" <<'PY'
+          import datetime,json,os,pathlib,sys
+          data={
+            "type":"Portico disposable E2E, one connected path",
+            "commit_sha":os.environ["GITHUB_SHA"],
+            "run_id":os.environ["GITHUB_RUN_ID"],
+            "timestamp_utc":datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "verified":["real_zitadel_postgresql","trusted_traefik_https",
+                        "distributed_gateway","real_unix_ipc_broker",
+                        "scoped_read","scoped_write","outside_scope_read_denied",
+                        "outside_scope_write_denied","invalid_token_denied",
+                        "durable_broker_audit_valid",
+                        "legacy_https_config_migration_and_restore"],
+            "privileged_broker":False,
+            "operator_login_through_chatgpt":False,
+            "real_signed_rc_upgrade_rollback":False,
+            "gate_c_formally_approved":False
+          }
+          pathlib.Path(sys.argv[1]).write_text(json.dumps(data,indent=2)+"\n")
+          PY
+          docker rm -f portico-ci-e2e-gateway portico-ci-e2e-broker >/dev/null
+          echo "GATE_C_UNIFIED_DISPOSABLE_E2E_OK"
+
           echo "ZITADEL + Postgres + isolated Traefik + private CA: PASS (no signed-RC rollback claimed)"
+
+      - name: Publish sanitized end-to-end evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-c-unified-disposable-e2e
+          path: ${{ runner.temp }}/portico-e2e-evidence.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Cleanup
         if: always()
