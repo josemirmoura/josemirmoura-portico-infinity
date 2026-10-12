@@ -9,7 +9,7 @@ Portico MCP is installed from the terminal using the repository's transparent Do
 Before running the guided flow:
 
 - Linux VPS; Ubuntu 24.04 LTS is the release-candidate validated target;
-- Docker Engine 24+ and Docker Compose v2;
+- Docker Engine 24+ and Docker Compose v2/v5;
 - at least 2 GB RAM for the bundled ZITADEL path;
 - Git, OpenSSL, Python 3 and curl;
 - public DNS for the MCP hostname, TCP 80/443 available and valid HTTPS;
