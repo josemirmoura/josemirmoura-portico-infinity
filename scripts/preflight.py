@@ -51,6 +51,46 @@ def major_version(raw: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+# Compose v5 retains the docker compose CLI and supports the v2 Compose format.
+# Treat unsupported majors separately from tools that are actually missing.
+SUPPORTED_COMPOSE_MAJORS = (2, 5)
+
+
+def print_package_repair(checks: list[Check]) -> None:
+    """Show copyable, opt-in repairs for missing standard Debian/Ubuntu tools.
+
+    Never modify the host or guess how to reinstall a running Docker engine.
+    """
+    if not shutil.which("apt-get"):
+        return
+    try:
+        release = platform.freedesktop_os_release()
+    except OSError:
+        return
+    if release.get("ID", "").lower() not in ("debian", "ubuntu"):
+        return
+
+    packages = {
+        "git": "git", "curl": "curl", "openssl": "openssl",
+        "python3": "python3", "ss": "iproute2", "getent": "libc-bin",
+    }
+    needed = sorted({packages[check.key] for check in checks
+                     if check.status == "fail" and check.key in packages})
+    if not needed:
+        return
+    print()
+    print(t(
+        "Suggested commands for missing system packages (review before running):",
+        "Comandos sugeridos para pacotes ausentes (revise antes de executar):",
+    ))
+    print("  sudo apt-get update")
+    print("  sudo apt-get install " + " ".join(needed))
+    print(t(
+        "These commands are NOT executed automatically. Docker, systemd and networking failures require separate diagnosis.",
+        "Estes comandos NÃO são executados automaticamente. Falhas de Docker, systemd e rede exigem diagnóstico separado.",
+    ))
+
+
 def command_check(name: str, label: str, link: str = "") -> Check:
     path = shutil.which(name)
     if path:
@@ -150,7 +190,7 @@ def main() -> int:
         ))
         checks.append(Check(
             "compose",
-            "Docker Compose v2",
+            "Docker Compose",
             "fail",
             t("Docker is required first", "o Docker precisa ser instalado primeiro"),
             "https://docs.docker.com/compose/install/linux/",
@@ -180,16 +220,22 @@ def main() -> int:
 
         rc, compose = cmd("docker", "compose", "version", "--short")
         compose_major = major_version(compose) if rc == 0 else None
-        if rc != 0 or compose_major != 2:
+        if rc != 0 or compose_major not in SUPPORTED_COMPOSE_MAJORS:
+            if rc != 0 or compose_major is None:
+                detail = t("not installed or not accessible", "não instalado ou inacessível")
+                if compose:
+                    detail += f" ({compose})"
+            else:
+                detail = t(
+                    f"unsupported Compose version {compose}; expected major 2 or 5",
+                    f"Compose {compose} não homologado; esperado major 2 ou 5",
+                )
             checks.append(Check(
-                "compose",
-                "Docker Compose v2",
-                "fail",
-                compose or t("not available", "não disponível"),
+                "compose", "Docker Compose", "fail", detail,
                 "https://docs.docker.com/compose/install/linux/",
             ))
         else:
-            checks.append(Check("compose", "Docker Compose v2", "ok", compose))
+            checks.append(Check("compose", "Docker Compose", "ok", compose))
 
     systemd_ok = bool(shutil.which("systemctl")) and pathlib.Path("/run/systemd/system").is_dir()
     checks.append(Check(
@@ -307,7 +353,7 @@ def main() -> int:
     print()
     width = max(len(x.label) for x in checks)
     for item in checks:
-        badge = {"ok": "OK", "warn": t("WARN", "ATENÇÃO"), "fail": t("MISSING", "FALTA")}[item.status]
+        badge = {"ok": "OK", "warn": t("WARN", "ATENÇÃO"), "fail": t("FAIL", "FALHA")}[item.status]
         dots = "." * max(2, width - len(item.label) + 4)
         print(f"  {item.label} {dots} {badge}" + (f"  {item.detail}" if item.detail else ""))
 
@@ -321,6 +367,7 @@ def main() -> int:
             print(f"  - {item.label}: {item.detail}")
             if item.link:
                 print("    " + t("Official documentation", "Documentação oficial") + f": {item.link}")
+        print_package_repair(failures)
         return 1
 
     print()
