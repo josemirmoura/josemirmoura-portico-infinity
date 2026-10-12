@@ -558,10 +558,12 @@ PY
   unset PASSWORD PASSWORD2 2>/dev/null || true
 
   echo "$(vps_agent_text 'Creating the dedicated non-admin Portico operator identity...' 'Criando a identidade dedicada e não administrativa do operador Portico...')"
+  # The curl process runs in an ephemeral container: host-only temporary
+  # paths are invisible there, so discard the unused POST body inside it.
   set +e
   HTTP_CODE="$(
     curl_zitadel_internal \
-      --output "$VPS_AGENT_SETUP_TMP/vps-agent-create-operator.json" \
+      --output /dev/null \
       --write-out '%{http_code}' \
       --request POST \
       --url "http://127.0.0.1:8080/v2/users/$ZITADEL_INTERACTIVE_USER_KIND" \
@@ -576,7 +578,6 @@ PY
 
   if [ "$CURL_STATUS" -ne 0 ] || { [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; }; then
     echo "$(vps_agent_text "ERROR: operator creation failed (curl=$CURL_STATUS HTTP=${HTTP_CODE:-none})." "ERRO: falha ao criar o operador (curl=$CURL_STATUS HTTP=${HTTP_CODE:-nenhum}).")" >&2
-    cat "$VPS_AGENT_SETUP_TMP/vps-agent-create-operator.json" >&2 2>/dev/null || true
     exit 1
   fi
 
