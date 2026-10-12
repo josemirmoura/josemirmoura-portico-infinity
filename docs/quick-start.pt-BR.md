@@ -7,7 +7,7 @@ O Portico MCP é instalado pelo terminal, com Docker Compose e scripts transpare
 Antes de executar a instalação guiada:
 
 - VPS ou computador Linux; Ubuntu 24.04 LTS é o alvo homologado do candidato de lançamento;
-- Docker Engine 24 ou superior e plugin Docker Compose v2;
+- Docker Engine 24 ou superior e plugin Docker Compose v2/v5;
 - pelo menos 2 GB de RAM para a instalação do ZITADEL incluída;
 - Git, OpenSSL, Python 3 e curl;
 - DNS público para o domínio MCP, portas TCP 80/443 acessíveis e HTTPS com certificado válido;
