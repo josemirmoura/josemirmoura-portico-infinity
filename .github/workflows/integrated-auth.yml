@@ -249,6 +249,307 @@ jobs:
           print('REAL DYNAMIC CLIENT REGISTRATION: PASS')
           PY
 
+      - name: Gate C real ZITADEL introspection through verified isolated Traefik TLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          lab="$(mktemp -d /tmp/portico-zitadel-https.XXXXXXXX)"
+          chmod 700 "$lab"
+          trap 'COMPOSE_PROJECT_NAME=portico-gate-c-migration docker compose -f "$lab/migrate/compose.yaml" -f "$lab/migrate/compose.integrated-auth.yaml" --project-directory "$lab/migrate" down -v --remove-orphans >/dev/null 2>&1 || true; docker rm -f portico-ci-real-gateway portico-ci-zitadel-tls >/dev/null 2>&1 || true; rm -rf -- "$lab"' EXIT
+
+          # No host-published ports, Docker socket, operator credentials or external
+          # mounts. Reuse only the already disposable ZITADEL/Postgres CI network.
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout "$lab/ca.key" -out "$lab/ca.pem" \
+            -subj '/CN=Portico Disposable CA' \
+            -addext 'basicConstraints=critical,CA:TRUE' \
+            -addext 'keyUsage=critical,keyCertSign,cRLSign' >/dev/null 2>&1
+          openssl req -new -newkey rsa:2048 -nodes \
+            -keyout "$lab/server.key" -out "$lab/server.csr" \
+            -subj '/CN=mcp.example.invalid' >/dev/null 2>&1
+          printf 'subjectAltName=DNS:mcp.example.invalid\nextendedKeyUsage=serverAuth\nbasicConstraints=CA:FALSE\n' > "$lab/server.ext"
+          openssl x509 -req -in "$lab/server.csr" -CA "$lab/ca.pem" \
+            -CAkey "$lab/ca.key" -CAcreateserial -out "$lab/server.pem" \
+            -days 1 -extfile "$lab/server.ext" >/dev/null 2>&1
+          chmod 600 "$lab/"*.key
+          cat > "$lab/traefik.yml" <<'YAML'
+          http:
+            routers:
+              introspection:
+                rule: 'Host("mcp.example.invalid") && Path("/oauth/v2/introspect")'
+                entryPoints: [secure]
+                service: real-zitadel
+                tls: {}
+            services:
+              real-zitadel:
+                loadBalancer:
+                  servers:
+                    - url: "h2c://zitadel-api:8080"
+          tls:
+            certificates:
+              - certFile: /pki/server.pem
+                keyFile: /pki/server.key
+          YAML
+          cp /tmp/introspection-app.json "$lab/introspection-app.json"
+          cp /tmp/probe-token.json "$lab/probe-token.json"
+          chmod 600 "$lab/"*.json
+
+          # File-provider only. No Docker API, privileged container, host ports,
+          # host networking or access to the operator's real DNS/certificates.
+          docker run --detach --rm --name portico-ci-zitadel-tls \
+            --user "$(id -u):$(id -g)" \
+            --network ci-edge --network-alias mcp.example.invalid \
+            --cap-drop ALL --cap-add NET_BIND_SERVICE \
+            --security-opt no-new-privileges:true \
+            --mount "type=bind,src=$lab,dst=/pki,readonly" \
+            traefik:v3.6 \
+            --entrypoints.secure.address=:443 \
+            --providers.file.filename=/pki/traefik.yml \
+            --api.dashboard=false --log.level=ERROR >/dev/null
+
+          cat > "$lab/probe.py" <<'PY'
+          import base64, json, os, ssl, time, urllib.error, urllib.parse, urllib.request
+
+          base = "https://mcp.example.invalid/oauth/v2/introspect"
+          client = json.load(open("/pki/introspection-app.json", encoding="utf-8"))
+          token = json.load(open("/pki/probe-token.json", encoding="utf-8"))["access_token"]
+          client_id, client_secret = client["clientId"], client["clientSecret"]
+          secure_context = ssl.create_default_context(cafile="/pki/ca.pem")
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args):
+                  return None
+
+          def opener(ctx):
+              return urllib.request.build_opener(
+                  urllib.request.HTTPSHandler(context=ctx),
+                  urllib.request.ProxyHandler({}), NoRedirect())
+
+          def request(bearer, client_secret_override=None, url=base):
+              secret = client_secret if client_secret_override is None else client_secret_override
+              credentials = base64.b64encode((client_id + ":" + secret).encode()).decode()
+              body = urllib.parse.urlencode({"token": bearer}).encode()
+              return urllib.request.Request(url, data=body, method="POST", headers={
+                  "Authorization": "Basic " + credentials,
+                  "Content-Type": "application/x-www-form-urlencoded"})
+
+          trusted = opener(secure_context)
+          for attempt in range(40):
+              try:
+                  with trusted.open(request("invalid-disposable-token"), timeout=4) as response:
+                      assert response.status == 200, response.status
+                      assert json.load(response).get("active") is False
+                  break
+              except (OSError, urllib.error.URLError):
+                  if attempt == 39:
+                      raise
+                  time.sleep(2)
+
+          with trusted.open(request(token), timeout=8) as response:
+              assert response.status == 200
+              actual = json.load(response)
+              assert actual.get("active") is True
+              assert actual.get("sub")
+              assert actual.get("iss") == "https://mcp.example.invalid"
+              assert actual.get("aud")
+          try:
+              trusted.open(request(token, client_secret_override="invalid-client-secret"), timeout=8)
+              raise AssertionError("wrong introspection credentials were accepted")
+          except urllib.error.HTTPError as exc:
+              # ZITADEL v4 may return OAuth invalid_client as HTTP 400,
+              # unlike the synthetic IDP's 401. Either must fail closed.
+              assert exc.code in (400, 401), exc.code
+
+          try:
+              opener(ssl.create_default_context()).open(request(token), timeout=8)
+              raise AssertionError("untrusted CA unexpectedly accepted")
+          except (ssl.SSLError, urllib.error.URLError):
+              pass
+
+          try:
+              trusted.open(request(token, url="https://portico-ci-zitadel-tls/oauth/v2/introspect"), timeout=8)
+              raise AssertionError("incorrect TLS hostname unexpectedly accepted")
+          except (ssl.SSLError, urllib.error.URLError):
+              pass
+
+          print("GATE_C_REAL_ZITADEL_TRUSTED_HTTPS_OK")
+          PY
+          docker run --rm --network ci-edge \
+            --user "$(id -u):$(id -g)" \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --mount "type=bind,src=$lab,dst=/pki,readonly" \
+            python:3.12-slim-bookworm python3 /pki/probe.py
+
+          # Exercise the exact distributed Gateway binary/image (not a fake
+          # introspection client) against this real TLS-protected ZITADEL.
+          # No privileged Broker, operator host mount or host port is needed.
+          docker build --quiet --target gateway -t portico-gate-c-real-gateway:disposable . >/dev/null
+          python3 - "$lab/gateway.env" <<'PY'
+          import json, pathlib, sys
+          identity=json.load(open("/tmp/introspection-app.json", encoding="utf-8"))
+          project=json.load(open("/tmp/resource-project.json", encoding="utf-8"))["id"]
+          settings={
+              "VPS_AGENT_LISTEN":"0.0.0.0:8080",
+              "VPS_AGENT_POC_ROOT":"/tmp/gate-c-local-root",
+              "VPS_AGENT_AUTH_MODE":"integrated",
+              "VPS_AGENT_OIDC_ISSUER":"https://mcp.example.invalid",
+              "VPS_AGENT_PUBLIC_URL":"https://mcp.example.invalid/mcp",
+              "VPS_AGENT_INTEGRATED_INTROSPECTION_URL":"https://mcp.example.invalid/oauth/v2/introspect",
+              "VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_ID":identity["clientId"],
+              "VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_SECRET":identity["clientSecret"],
+              "VPS_AGENT_INTEGRATED_AUDIENCE_PROJECT_ID":project,
+              "VPS_AGENT_REQUIRED_SCOPES":f"urn:zitadel:iam:org:project:id:{project}:aud",
+              "SSL_CERT_FILE":"/tmp/disposable-ca.pem",
+          }
+          target=pathlib.Path(sys.argv[1])
+          target.write_text("".join(f"{key}={value}\n" for key,value in settings.items()))
+          target.chmod(0o600)
+          PY
+          docker run --detach --rm --name portico-ci-real-gateway \
+            --network ci-edge --read-only \
+            --user 65532:65532 \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,size=16777216 \
+            --mount "type=bind,src=$lab/ca.pem,dst=/tmp/disposable-ca.pem,readonly" \
+            --env-file "$lab/gateway.env" \
+            portico-gate-c-real-gateway:disposable >/dev/null
+          cat > "$lab/gateway-probe.py" <<'PY'
+          import json, time, urllib.error, urllib.request
+
+          token=json.load(open("/pki/probe-token.json",encoding="utf-8"))["access_token"]
+          base="http://portico-ci-real-gateway:8080"
+          opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          payload=json.dumps({
+              "jsonrpc":"2.0", "id":7, "method":"tools/call",
+              "params":{
+                  "name":"system.info", "arguments":{},
+                  "_meta":{
+                      "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                      "io.modelcontextprotocol/clientInfo":{"name":"real-idp-disposable","version":"1"},
+                      "io.modelcontextprotocol/clientCapabilities":{}
+                  }
+              }
+          }).encode()
+          def call(bearer=None):
+              headers={
+                  "Content-Type":"application/json",
+                  "Accept":"application/json, text/event-stream",
+                  "MCP-Protocol-Version":"2026-07-28",
+                  "Mcp-Method":"tools/call",
+                  "Mcp-Name":"system.info",
+              }
+              if bearer is not None:
+                  headers["Authorization"]="Bearer "+bearer
+              return urllib.request.Request(base+"/mcp",data=payload,headers=headers,method="POST")
+          response=None
+          for attempt in range(45):
+              try:
+                  response=opener.open(call(token),timeout=5)
+                  break
+              except (urllib.error.URLError, OSError):
+                  if attempt==44:
+                      raise
+                  time.sleep(1)
+          with response as authenticated:
+              assert authenticated.status==200, authenticated.status
+              result=json.load(authenticated)
+              assert not result.get("error"), "unexpected JSON-RPC error"
+              assert result.get("result",{}).get("isError") is not True, "tool denied"
+              content=result["result"]
+              assert content, "empty real Gateway result"
+          for bearer in (None, "invalid-gate-c-token"):
+              try:
+                  opener.open(call(bearer),timeout=7)
+                  raise AssertionError("unauthenticated Gateway tool call was accepted")
+              except urllib.error.HTTPError as err:
+                  assert err.code==401, err.code
+                  assert "resource_metadata=" in err.headers.get("WWW-Authenticate","")
+          print("GATE_C_REAL_GATEWAY_REAL_ZITADEL_TLS_OK")
+          PY
+          docker run --rm --network ci-edge \
+            --user "$(id -u):$(id -g)" \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --mount "type=bind,src=$lab,dst=/pki,readonly" \
+            python:3.12-slim-bookworm python3 /pki/gateway-probe.py
+          docker rm -f portico-ci-real-gateway >/dev/null
+          echo "Real distributed Gateway + real ZITADEL introspection via trusted HTTPS: PASS (local nonprivileged executor; Broker proof separate)"
+
+          # Migrator against the same real in-network ZITADEL HTTPS endpoint.
+          # Only an isolated copied Compose project is used; never the original
+          # project's identity volumes, Broker or update script on the VPS.
+          mkdir -p "$lab/cert-image" "$lab/migrate/scripts" "$lab/migrate/config" "$lab/migrate/state"
+          cp "$lab/ca.pem" "$lab/cert-image/ca.pem"
+          chmod 644 "$lab/cert-image/ca.pem"
+          cat > "$lab/cert-image/Dockerfile" <<'DOCKER'
+          FROM portico-gate-c-real-gateway:disposable
+          USER root
+          COPY ca.pem /usr/local/share/ca-certificates/portico-gate-c.crt
+          RUN update-ca-certificates
+          USER 65532:65532
+          DOCKER
+          docker build --quiet -t portico-gate-c-trusted-gateway:disposable "$lab/cert-image" >/dev/null
+          cp compose.yaml compose.integrated-auth.yaml "$lab/migrate/"
+          cp scripts/prepare-https-introspection.sh "$lab/migrate/scripts/"
+          chmod 700 "$lab/migrate/scripts/prepare-https-introspection.sh"
+          printf 'disposable scoped-state sentinel\n' > "$lab/migrate/state/sentinel"
+          printf 'version: 1\nmode: scoped\n' > "$lab/migrate/config/policy.yaml"
+          python3 - "$lab/migrate/.env" <<'PY'
+          import json,pathlib,sys
+          app=json.load(open("/tmp/introspection-app.json",encoding="utf-8"))
+          cfg={
+              "VPS_AGENT_AUTH_MODE":"integrated",
+              "VPS_AGENT_DOMAIN":"mcp.example.invalid",
+              "VPS_AGENT_INTEGRATED_INTROSPECTION_URL":"http://zitadel-auth-internal:8080/oauth/v2/introspect",
+              "VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_ID":app["clientId"],
+              "VPS_AGENT_INTEGRATED_INTROSPECTION_CLIENT_SECRET":app["clientSecret"],
+              "VPS_AGENT_GATEWAY_IMAGE":"portico-gate-c-trusted-gateway:disposable",
+              "VPS_AGENT_EDGE_NETWORK":"ci-edge",
+              "VPS_AGENT_ADMIN_TOKEN":"disposable-only-not-owner-admin",
+              "VPS_AGENT_SCOPE_ROOT":"/tmp/portico-disposable-no-mount",
+              "VPS_AGENT_WHOLE_HOST":"0",
+              "VPS_AGENT_BUNDLED_PROXY":"0",
+              "VPS_AGENT_PUBLIC_URL":"https://mcp.example.invalid/mcp",
+              "ZITADEL_MASTERKEY":"00000000000000000000000000000000",
+              "ZITADEL_POSTGRES_PASSWORD":"disposable-not-started",
+              "ZITADEL_BOOTSTRAP_ADMIN_PASSWORD":"disposable-not-started",
+              "ZITADEL_BOOTSTRAP_PAT_EXPIRATION":"2099-01-01T00:00:00Z",
+              "ZITADEL_LOGIN_PAT_EXPIRATION":"2099-01-01T00:00:00Z",
+          }
+          path=pathlib.Path(sys.argv[1])
+          path.write_text("".join(f"{k}={v}\n" for k,v in cfg.items()))
+          path.chmod(0o600)
+          PY
+          cp -p "$lab/migrate/.env" "$lab/original-legacy.env"
+          (
+            set -euo pipefail
+            cd "$lab/migrate"
+            # Explicitly override top-level Compose name to avoid all overlap.
+            export COMPOSE_PROJECT_NAME=portico-gate-c-migration
+            original_hash="$(sha256sum .env | cut -d ' ' -f1)"
+            state_hash="$(sha256sum state/sentinel | cut -d ' ' -f1)"
+            bash scripts/prepare-https-introspection.sh --check
+            test "$(sha256sum .env | cut -d ' ' -f1)" = "$original_hash"
+            test ! -e backups
+            bash scripts/prepare-https-introspection.sh --apply
+            grep -qx 'VPS_AGENT_INTEGRATED_INTROSPECTION_URL=https://mcp.example.invalid/oauth/v2/introspect' .env
+            test "$(stat -c %a .env)" = 600
+            backup="$(find backups -type f -name previous.env -print -quit)"
+            test -n "$backup"
+            test "$(stat -c %a "$backup")" = 600
+            test "$(stat -c %a "$(dirname "$backup")")" = 700
+            cmp -s "$backup" "$lab/original-legacy.env"
+            test "$(sha256sum state/sentinel | cut -d ' ' -f1)" = "$state_hash"
+            # No restart, no identity volume change. Test operator-controlled
+            # byte-exact rollback of the legacy config from private backup.
+            cp -p -- "$backup" .env
+            cmp -s .env "$lab/original-legacy.env"
+            test "$(stat -c %a .env)" = 600
+          )
+          echo "GATE_C_REAL_ZITADEL_ENV_MIGRATION_RESTORE_OK (config backup only; not signed-RC rollback)"
+
+
+          echo "ZITADEL + Postgres + isolated Traefik + private CA: PASS (no signed-RC rollback claimed)"
+
       - name: Cleanup
         if: always()
         run: |
