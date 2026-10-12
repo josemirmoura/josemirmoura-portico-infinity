@@ -60,7 +60,7 @@ Propriedades centrais:
 Para o caminho suportado atual:
 
 - host Linux; Ubuntu 24.04 LTS é o alvo validado no release candidate;
-- Docker Engine 24+ e Docker Compose v2;
+- Docker Engine 24+ e Docker Compose v2/v5;
 - Git, OpenSSL, Python 3 e curl;
 - DNS público + HTTPS válido para o endpoint MCP;
 - um chat web/cliente MCP compatível em que a capability necessária de MCP personalizado esteja disponível.
