@@ -229,7 +229,7 @@ if [ -n "$MOCK_MOUNT_TARGET" ]; then echo "$MOCK_MOUNT_TARGET"; fi
         result = self.run_remove("--purge", MOCK_ACTIVE="0",
                                  VPS_AGENT_PURGE_CONFIRM="")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(".env is a symlink", result.stderr)
+        self.assertIn(".env must be a regular non-symlink file", result.stderr)
         self.assertEqual(outside.read_text(), "COMPOSE_PROJECT_NAME=mcp-vps-agent\n")
         self.assert_no_destructive_docker()
 
