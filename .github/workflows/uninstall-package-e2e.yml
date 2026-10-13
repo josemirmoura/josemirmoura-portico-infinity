@@ -96,3 +96,23 @@ jobs:
           docker network inspect portico-e2e-external >/dev/null
           docker network rm portico-e2e-external >/dev/null
           echo 'EPHEMERAL PORTICO UNINSTALL PACKAGE: PASS'
+      - name: Build reviewed uninstall candidate
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/uninstall-staging/scripts"
+          cp scripts/remove.sh "$RUNNER_TEMP/uninstall-staging/scripts/remove.sh"
+          printf 'SOURCE_COMMIT=%s\n' "$GITHUB_SHA" >"$RUNNER_TEMP/uninstall-staging/SOURCE_COMMIT"
+          tar -czf "$RUNNER_TEMP/portico-uninstall-candidate.tar.gz" \
+            -C "$RUNNER_TEMP/uninstall-staging" scripts/remove.sh SOURCE_COMMIT
+          (cd "$RUNNER_TEMP" && sha256sum portico-uninstall-candidate.tar.gz > portico-uninstall-candidate.tar.gz.sha256)
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: portico-uninstall-candidate
+          path: |
+            ${{ runner.temp }}/portico-uninstall-candidate.tar.gz
+            ${{ runner.temp }}/portico-uninstall-candidate.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
