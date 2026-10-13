@@ -565,7 +565,7 @@ func (m *Manager) Move(src, dst string) error {
 		return errors.New("cannot move an authorized root directory")
 	}
 	if srcRootPath == dstRootPath {
-		root, err := os.OpenRoot(m.physical(srcRootPath))
+		root, err := m.openVerifiedRoot(srcRootPath)
 		if err != nil {
 			return err
 		}
