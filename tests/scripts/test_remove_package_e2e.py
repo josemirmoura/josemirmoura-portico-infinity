@@ -30,6 +30,9 @@ class RemovalPackageTests(unittest.TestCase):
 set -euo pipefail
 printf '%s\n' "$*" >>"$MOCK_DOCKER_LOG"
 if [ "$1" = "ps" ]; then exit 0; fi
+if [ "$1" = "compose" ] && [ "$2" = "exec" ] && [ "${MOCK_FAIL_REVOKE:-0}" = "1" ]; then
+  exit 17
+fi
 if [ "$1" = "volume" ] && [ "$2" = "ls" ]; then
   # Simulate an already-existing project-named volume owned by a third party.
   if [ "$MOCK_VOLUME_OWNER" = "another-project" ]; then
@@ -74,6 +77,7 @@ exit 0
             "MOCK_VOLUME_OWNER": "mcp-vps-agent",
             "MOCK_VOLUME_INVENTORY_LONG": "0",
             "MOCK_FAIL_VOLUME_RM": "0",
+            "MOCK_FAIL_REVOKE": "0",
             "VPS_AGENT_LANG": "en",
         }
 
@@ -176,6 +180,40 @@ exit 0
         self.assertFalse(any(" down -v" in call or call.startswith("volume rm ")
                              for call in self.commands()),
                          "large inventory must never bypass fail-closed ownership guard")
+
+    def _run_revoke_block(self, *, mode="safe", fail_revoke=False):
+        # Isolate the revoke-all gate before credentials rotate or Compose stops.
+        marker = "# A safe removal preserves the Broker grant database"
+        start = self.script.index(marker)
+        end = self.script.index('if [ -f .env ]; then\n  old_admin=', start)
+        (self.dir / ".env").write_text("VPS_AGENT_ADMIN_TOKEN=synthetic-only\\n")
+        env = self.env | {"MOCK_FAIL_REVOKE": "1" if fail_revoke else "0"}
+        return subprocess.run(
+            ["bash", "-c", 'set -euo pipefail\n'
+             'project_ids=deadbeefcaf0\n' + 'mode=' + mode + '\n'
+             + self.script[start:end] + '\necho REVOCATION_BLOCK_OK\n'],
+            cwd=self.dir, env=env, capture_output=True, text=True, timeout=15,
+        )
+
+    def test_safe_removal_must_block_if_grant_revocation_fails(self):
+        result = self._run_revoke_block(mode="safe", fail_revoke=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("REMOVE BLOCKED", result.stderr)
+        self.assertNotIn("REVOCATION_BLOCK_OK", result.stdout)
+        self.assertFalse(any(" down " in call or call.startswith("rm ")
+                             for call in self.commands()))
+
+    def test_safe_removal_succeeds_only_after_confirmed_revoke(self):
+        result = self._run_revoke_block(mode="safe")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("REVOCATION_BLOCK_OK", result.stdout)
+        self.assertTrue(any(call.startswith("compose exec -T broker")
+                            for call in self.commands()))
+
+    def test_purge_unconfirmed_revoke_is_explicit_notice_not_false_success(self):
+        result = self._run_revoke_block(mode="--purge", fail_revoke=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("REMOVE NOTICE", result.stderr)
 
     def test_volume_removal_error_is_not_hidden(self):
         result = self._run_purge_block(MOCK_FAIL_VOLUME_RM="1")
