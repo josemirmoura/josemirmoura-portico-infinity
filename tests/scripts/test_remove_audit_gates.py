@@ -112,6 +112,76 @@ if [ -n "$MOCK_MOUNT_TARGET" ]; then echo "$MOCK_MOUNT_TARGET"; fi
         self.assertFalse(sentinel.exists(), "preflight failure must occur before sourcing .env")
         self.assert_no_destructive_docker()
 
+    def test_safe_no_containers_with_persisted_grants_and_env_stops(self):
+        env_file = self.root / ".env"
+        env_file.write_text("COMPOSE_PROJECT_NAME=mcp-vps-agent\n")
+        state_dir = self.root / "state"
+        state_dir.mkdir()
+        grants_file = state_dir / "grants.db"
+        grants_file.write_text("persisted-authorization-record")
+        result = self.run_remove("safe", MOCK_ACTIVE="0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Broker unavailable; cannot confirm temporary grant revocation", result.stderr)
+        self.assertNotIn("SAFE REMOVE COMPLETE", result.stdout)
+        self.assertEqual(grants_file.read_text(), "persisted-authorization-record")
+        self.assertEqual(env_file.read_text(), "COMPOSE_PROJECT_NAME=mcp-vps-agent\n")
+        self.assert_no_destructive_docker()
+
+    def test_safe_no_containers_with_env_even_without_state_stops(self):
+        (self.root / ".env").write_text("COMPOSE_PROJECT_NAME=mcp-vps-agent\n")
+        result = self.run_remove("safe", MOCK_ACTIVE="0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Broker unavailable", result.stderr)
+        self.assertNotIn("SAFE REMOVE COMPLETE", result.stdout)
+        self.assert_no_destructive_docker()
+
+    def test_safe_no_env_no_containers_but_persisted_grants_stops(self):
+        state_dir = self.root / "state"
+        state_dir.mkdir()
+        (state_dir / "grants.db").write_text("persisted")
+        result = self.run_remove("safe", MOCK_ACTIVE="0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Broker unavailable", result.stderr)
+        self.assertEqual((state_dir / "grants.db").read_text(), "persisted")
+        self.assert_no_destructive_docker()
+
+    def test_purge_confirmation_only_in_env_file_must_not_authorize(self):
+        (self.root / ".env").write_text(
+            "COMPOSE_PROJECT_NAME=mcp-vps-agent\n"
+            "VPS_AGENT_PURGE_CONFIRM=PURGE\n"
+            "VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE\n"
+        )
+        # Explicit caller env has no confirmation, although the .env does.
+        result = self.run_remove("--purge", MOCK_ACTIVE="0",
+                                 VPS_AGENT_PURGE_CONFIRM="",
+                                 VPS_AGENT_REMOVE_SOURCE_CONFIRM="")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Full purge requires VPS_AGENT_PURGE_CONFIRM=PURGE", result.stderr)
+        self.assertTrue((self.root / ".env").exists())
+        self.assert_no_destructive_docker()
+
+    def test_remove_source_confirmation_only_in_env_file_must_not_authorize(self):
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True,
+                       capture_output=True, text=True)
+        (self.root / "go.mod").write_text(
+            "module github.com/josemirmoura/mcp-vps-agent-gateway\n"
+        )
+        env_text = ("COMPOSE_PROJECT_NAME=mcp-vps-agent\n"
+                    "VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE\n")
+        (self.root / ".env").write_text(env_text)
+        # The PURGE value is intentionally supplied by the caller, but the
+        # second source-removal consent is present in .env only.
+        result = self.run_remove("--purge", "--remove-source",
+                                 MOCK_ACTIVE="0",
+                                 VPS_AGENT_PURGE_CONFIRM="PURGE",
+                                 VPS_AGENT_REMOVE_SOURCE_CONFIRM="")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Source deletion requires VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE",
+                      result.stderr)
+        self.assertEqual((self.root / ".env").read_text(), env_text)
+        self.assertTrue((self.root / "go.mod").exists())
+        self.assert_no_destructive_docker()
+
     def test_state_bind_mount_blocks_purge_before_mutation(self):
         (self.root / ".env").write_text("COMPOSE_PROJECT_NAME=mcp-vps-agent\n")
         state = self.root / "state"
