@@ -84,6 +84,16 @@ exit 0
                 for x in self.commands()), self.commands()
         )
 
+    def test_preview_never_sources_a_command_in_env(self):
+        sentinel = self.dir / "should-never-be-created"
+        (self.dir / ".env").write_text("COMMAND_SUBSTITUTION=$(touch " + str(sentinel) + ")\n")
+        result = subprocess.run(
+            ["bash", "scripts/remove.sh", "--purge", "--dry-run"],
+            cwd=self.dir, env=self.env, capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("REMOVAL PREVIEW", result.stdout)
+        self.assertFalse(sentinel.exists(), "preview must not evaluate shell code from .env")
     def test_env_cannot_change_compose_project_name(self):
         (self.dir / ".env").write_text("COMPOSE_PROJECT_NAME=foreign-project\n")
         result = subprocess.run(
