@@ -37,6 +37,7 @@ class RemoveProjectOwnershipTests(unittest.TestCase):
 set -euo pipefail
 repo_root="$PWD"
 mode="$MOCK_MODE"
+dry_run=0
 docker() {
   printf '%s\n' "$*" >> "$MOCK_DOCKER_LOG"
   if [ "$1" = ps ]; then
