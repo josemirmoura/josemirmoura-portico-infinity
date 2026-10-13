@@ -84,7 +84,6 @@ BILINGUAL_GUIDES = (
     ("docs/installer-flow.md", "docs/installer-flow.pt-BR.md"),
     ("docs/installation-contract.md", "docs/installation-contract.pt-BR.md"),
     ("docs/chatgpt-integration.md", "docs/chatgpt-integration.pt-BR.md"),
-    ("docs/connect-ai-clients.md", "docs/connect-ai-clients.pt-BR.md"),
 )
 
 FLOW_MARKERS = {
