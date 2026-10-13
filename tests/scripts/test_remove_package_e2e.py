@@ -34,6 +34,10 @@ if [ "$1" = "volume" ] && [ "$2" = "ls" ]; then
   # Simulate an already-existing project-named volume owned by a third party.
   if [ "$MOCK_VOLUME_OWNER" = "another-project" ]; then
     echo "mcp-vps-agent_operator-run"
+    # A large inventory previously triggered pipefail/SIGPIPE, skipping grep -q.
+    if [ "$MOCK_VOLUME_INVENTORY_LONG" = 1 ]; then
+      seq 1 25000 | sed 's/^/unrelated-volume-/'
+    fi
   fi
   exit 0
 fi
@@ -68,6 +72,7 @@ exit 0
             "MOCK_DOCKER_LOG": str(self.log),
             "MOCK_NETWORK_REMOVED": str(self.dir / "network-removed"),
             "MOCK_VOLUME_OWNER": "mcp-vps-agent",
+            "MOCK_VOLUME_INVENTORY_LONG": "0",
             "MOCK_FAIL_VOLUME_RM": "0",
             "VPS_AGENT_LANG": "en",
         }
@@ -160,6 +165,17 @@ exit 0
         self.assertFalse(any(" down -v" in x for x in self.commands()),
                          "foreign-owned volume must be blocked BEFORE docker compose down -v")
         self.assertFalse(any(x.startswith("volume rm ") for x in self.commands()))
+
+    def test_large_foreign_volume_inventory_must_not_bypass_owner_guard(self):
+        result = self._run_purge_block(
+            MOCK_VOLUME_OWNER="another-project",
+            MOCK_VOLUME_INVENTORY_LONG="1",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("before Compose purge", result.stderr)
+        self.assertFalse(any(" down -v" in call or call.startswith("volume rm ")
+                             for call in self.commands()),
+                         "large inventory must never bypass fail-closed ownership guard")
 
     def test_volume_removal_error_is_not_hidden(self):
         result = self._run_purge_block(MOCK_FAIL_VOLUME_RM="1")
