@@ -78,6 +78,13 @@ if [ -n "$MOCK_MOUNT_TARGET" ]; then echo "$MOCK_MOUNT_TARGET"; fi
             for call in calls
         ), calls)
 
+    def test_dry_run_reveals_foreign_named_volume_without_mutation(self):
+        result = self.run_remove("--purge", "--dry-run", MOCK_FOREIGN_VOLUME="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("mcp-vps-agent_operator-run [owner=foreign-project]", result.stdout)
+        self.assertIn("FOREIGN/UNVERIFIED", result.stdout)
+        self.assert_no_destructive_docker()
+
     def test_safe_without_env_and_live_containers_fails_closed(self):
         result = self.run_remove("safe")
         self.assertNotEqual(result.returncode, 0)
