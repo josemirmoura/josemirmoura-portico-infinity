@@ -255,13 +255,820 @@ if [ "$mode" = "--purge" ]; then
 fi
 # END PRE-MUTATION PURGE SAFETY GATE
 
-if [ -f .env ]; then
-  set -a
-  . ./.env
-  set +a
+# Read .env as literal data only. Never source or eval installation
+# configuration: even a legitimate KEY=$(command) line would otherwise run
+# before operator consent. Compose still consumes its own .env separately.
+remove_load_env_literals() {
+  local line key value tail line_number=0
+  [ -e .env ] || return 0
+  if [ -L .env ] || [ ! -f .env ] || [ ! -r .env ]; then
+    echo "REMOVE BLOCKED: .env must be a readable regular file, not a symlink." >&2
+    return 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    line_number=$((line_number + 1))
+    line="${line%
+# Never allow its values to redirect `docker compose down` to another project.
+if [ "${COMPOSE_PROJECT_NAME:-mcp-vps-agent}" != "mcp-vps-agent" ]; then
+  echo "REMOVE BLOCKED: .env selects a noncanonical Compose project." >&2
+  exit 1
 fi
 
-# The checkout .env may define COMPOSE_PROJECT_NAME: check AGAIN after sourcing.
+
+if [ "$mode" = "--purge" ] && [ "$caller_purge_confirmation" != "PURGE" ]; then
+  if [ ! -t 0 ]; then
+    echo "$(vps_agent_text 'Full purge requires VPS_AGENT_PURGE_CONFIRM=PURGE in non-interactive mode.' 'O purge completo requer VPS_AGENT_PURGE_CONFIRM=PURGE em modo não interativo.')" >&2
+    exit 1
+  fi
+  printf '%s' "$(vps_agent_text 'Type PURGE to delete this Portico MCP installation configuration/state: ' 'Digite PURGE para apagar a configuração/estado desta instalação do Portico MCP: ')"
+  read -r answer
+  if [ "$answer" != "PURGE" ]; then
+    echo "$(vps_agent_text 'Purge cancelled.' 'Purge cancelado.')"
+    exit 1
+  fi
+fi
+
+if [ "$remove_source" -eq 1 ] && [ "$caller_source_confirmation" != "REMOVE_SOURCE" ]; then
+  if [ ! -t 0 ]; then
+    echo "$(vps_agent_text 'Source deletion requires VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE in non-interactive mode.' 'A remoção do código requer VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE em modo não interativo.')" >&2
+    exit 1
+  fi
+  printf '%s' "$(vps_agent_text 'Type REMOVE_SOURCE to also delete this Git checkout: ' 'Digite REMOVE_SOURCE para apagar também este checkout Git: ')"
+  read -r source_answer
+  if [ "$source_answer" != "REMOVE_SOURCE" ]; then
+    echo "$(vps_agent_text 'Source deletion cancelled.' 'Remoção do código cancelada.')"
+    exit 1
+  fi
+fi
+
+if vps_agent_is_pt_br; then
+  cat <<EOF
+Modo de remoção: $mode
+Runtime: Gateway + Broker + proxy do pacote (quando configurado)
+Recursos gerenciados da VPS: PRESERVADOS
+Policy/auditoria do operador: $([ "$mode" = "safe" ] && echo PRESERVADAS || echo APAGADAS)
+Checkout do código: $([ "$remove_source" -eq 1 ] && echo APAGAR || echo PRESERVAR)
+EOF
+else
+  cat <<EOF
+Removal mode: $mode
+Runtime: Gateway + Broker + package proxy (when configured)
+Managed VPS resources: PRESERVED
+Operator policy/audit: $([ "$mode" = "safe" ] && echo PRESERVED || echo DELETED)
+Source checkout: $([ "$remove_source" -eq 1 ] && echo DELETE || echo PRESERVED)
+EOF
+fi
+
+
+
+project_ids="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)" || {
+  echo "REMOVE BLOCKED: cannot re-inventory project containers before mutation." >&2
+  exit 1
+}
+# Safe mode preserves the grant database. With no running project containers,
+# the Broker cannot attest revocation; a configuration or persisted state
+# may be reactivated by a later installation. STOP before any mutation.
+if [ "$mode" = "safe" ] && [ -z "$project_ids" ] && { [ -f .env ] || [ -e state ] || [ -L state ]; }; then
+  echo "REMOVE BLOCKED: Broker unavailable; cannot confirm temporary grant revocation while configuration or state persists. Restore Broker for supervised revoke-all or inspect state with operator." >&2
+  exit 1
+fi
+if [ "$mode" = "safe" ] && [ -n "$project_ids" ] && [ ! -f .env ]; then
+  echo "REMOVE BLOCKED: running project containers without .env; cannot confirm temporary grant revocation in safe mode." >&2
+  exit 1
+fi
+if [ ! -f .env ] && [ -z "$project_ids" ]; then
+  if [ "$mode" = "--purge" ]; then
+    rm -rf -- state backups
+    rm -f -- config/policy.yaml
+    docker image rm mcp-vps-agent-gateway:local mcp-vps-agent-broker:local >/dev/null 2>&1 || true
+    remove_legacy_sandbox
+  fi
+  echo "$(vps_agent_text 'Runtime already absent; removal is idempotently complete.' 'O runtime já está ausente; a remoção idempotente está concluída.')"
+  if [ "$remove_source" -eq 1 ] && [ "$source_verified" -eq 1 ]; then
+    parent="$(dirname "$repo_root")"
+    cd /
+    rm -rf -- "$repo_root"
+    if [ "$(basename "$parent")" = "vps-agent-lab" ]; then
+      rmdir "$parent" >/dev/null 2>&1 || true
+    fi
+    echo "$(vps_agent_text 'Portico MCP source checkout removed.' 'Checkout do Portico MCP removido.')"
+  fi
+  exit 0
+fi
+
+compose=(docker compose --profile operator-portal -f compose.yaml)
+if [ "${VPS_AGENT_WHOLE_HOST:-0}" = "1" ]; then
+  compose+=(-f compose.host.yaml)
+fi
+if [ "${VPS_AGENT_AUTH_MODE:-}" = "integrated" ] && [ -f compose.integrated-auth.yaml ]; then
+  compose+=(-f compose.integrated-auth.yaml)
+  if [ "${VPS_AGENT_BUNDLED_PROXY:-0}" = "1" ] && [ -f compose.integrated-auth.proxy.yaml ]; then
+    compose+=(-f compose.integrated-auth.proxy.yaml)
+  fi
+fi
+
+# A safe removal preserves the Broker grant database, so silent revoke
+# failure could resurrect temporary permissions on restart. Refuse to claim
+# success unless revocation completed. Purge erases grants with Broker state.
+if [ -f .env ] && [ -n "$project_ids" ]; then
+  echo "$(vps_agent_text 'Revoking temporary grants before shutdown...' 'Revogando autorizações temporárias antes do desligamento...')"
+  if ! docker compose exec -T broker /usr/local/bin/vps-agent revoke-all --socket /run/vps-agent/broker.sock >/dev/null 2>&1; then
+    if [ "$mode" = "safe" ]; then
+      echo "REMOVE BLOCKED: temporary grant revocation was not confirmed; safe removal cannot preserve potentially live grants." >&2
+      exit 1
+    fi
+    echo "REMOVE NOTICE: revoke-all not confirmed; full purge must complete and destroy Broker state before removal can be accepted." >&2
+  fi
+fi
+
+if [ -f .env ]; then
+  old_admin="${VPS_AGENT_ADMIN_TOKEN:-}"
+  old_static="${VPS_AGENT_STATIC_TOKEN:-}"
+  new_admin="$(openssl rand -hex 32)"
+  new_static="$(openssl rand -hex 32)"
+  python3 - .env "$old_admin" "$new_admin" "$old_static" "$new_static" <<'PY'
+import pathlib, sys
+p=pathlib.Path(sys.argv[1])
+text=p.read_text()
+old_admin,new_admin,old_static,new_static=sys.argv[2:]
+if old_admin: text=text.replace(old_admin,new_admin)
+if old_static: text=text.replace(old_static,new_static)
+p.write_text(text)
+PY
+  chmod 600 .env
+  echo "$(vps_agent_text 'Local admin/static credentials rotated.' 'Credenciais locais admin/static foram rotacionadas.')"
+fi
+
+# BEGIN PROFILE-AWARE REMOVAL
+# The operator-portal profile is explicitly enabled in the Compose down
+# command. If Compose misses a project container, revalidate both labels
+# before removing that individual container (never a global prune).
+echo "$(vps_agent_text 'Stopping Portico MCP containers...' 'Parando os contêineres do Portico MCP...')"
+down_failed=0
+if [ -f .env ]; then
+  "${compose[@]}" down --remove-orphans || down_failed=1
+else
+  down_failed=1
+fi
+
+left="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)"
+if [ -n "$left" ]; then
+  echo "$(vps_agent_text 'Cleaning up remaining verified Portico profile containers...' 'Removendo contêineres restantes dos perfis do Portico após verificar propriedade...')"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    [[ "$id" =~ ^[0-9a-f]{12,64}$ ]] || { echo "REMOVE BLOCKED: unexpected container ID." >&2; exit 1; }
+    owner="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$id")"
+    project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$id")"
+    if [ "$owner" != "$(pwd -P)" ] || [ "$project" != "mcp-vps-agent" ]; then
+      echo "REMOVE BLOCKED: refusing to remove a container from another checkout." >&2
+      exit 1
+    fi
+    docker rm -f -- "$id" >/dev/null
+  done <<< "$left"
+  if [ -f .env ]; then
+    "${compose[@]}" down --remove-orphans
+    down_failed=0
+  fi
+elif [ "$down_failed" -eq 1 ] && [ -f .env ]; then
+  "${compose[@]}" down --remove-orphans
+  down_failed=0
+fi
+
+left="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)"
+if [ -n "$left" ]; then
+  echo "$(vps_agent_text "Removal incomplete: package containers still exist: $left" "Remoção incompleta: ainda existem contêineres do pacote: $left")" >&2
+  exit 1
+fi
+# END PROFILE-AWARE REMOVAL
+if [ -n "${VPS_AGENT_PUBLIC_URL:-}" ]; then
+  code="$(curl --silent --show-error --max-time 5 --output /dev/null --write-out '%{http_code}' "${VPS_AGENT_PUBLIC_URL}" 2>/dev/null || true)"
+  case "$code" in
+    000|"")
+      echo "$(vps_agent_text 'Public MCP endpoint is no longer reachable from this host.' 'O endpoint MCP público não está mais acessível a partir deste host.')"
+      ;;
+    404|410)
+      echo "$(vps_agent_text "Public MCP route is gone (HTTP $code from the remaining edge proxy)." "A rota MCP pública foi removida (HTTP $code no proxy de borda remanescente).")"
+      ;;
+    *)
+      echo "Removal incomplete: the MCP URL still returned HTTP $code instead of disappearing." >&2
+      echo "$(vps_agent_text 'Check for a stale proxy route before considering removal complete.' 'Verifique uma possível rota antiga no proxy antes de considerar a remoção concluída.')" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+if [ "$mode" = "safe" ]; then
+  if vps_agent_is_pt_br; then
+    cat <<'EOF'
+
+REMOÇÃO SEGURA CONCLUÍDA
+Removidos:
+  runtime Gateway/Broker/proxy do pacote
+  autorizações temporárias ativas
+Invalidadas:
+  credenciais bearer locais admin/static anteriores
+Preservados:
+  .env (com credenciais locais rotacionadas)
+  config/policy.yaml
+  state/ auditoria e histórico de operações
+  estado da identidade integrada
+  todos os recursos da VPS que o Portico podia gerenciar
+EOF
+  else
+    cat <<'EOF'
+
+SAFE REMOVE COMPLETE
+Removed:
+  Gateway/Broker/package proxy runtime
+  active temporary grants
+Invalidated:
+  previous local admin/static bearer credentials
+Preserved:
+  .env (with rotated local credentials)
+  config/policy.yaml
+  state/ audit and operation history
+  integrated identity state on safe remove
+  every VPS resource Portico MCP was allowed to manage
+EOF
+  fi
+  exit 0
+fi
+
+# BEGIN VERIFIED PURGE RESOURCES
+# Compose down -v can delete project-named volumes before a later ownership
+# check. Validate every named removal target BEFORE invoking down -v. A
+# foreign-owned or unlabeled volume is never a safe purge target.
+volume_inventory="$(docker volume ls --format '{{.Name}}')" || {
+  echo "REMOVE BLOCKED: cannot inventory Docker volumes before Compose purge." >&2
+  exit 1
+}
+for volume in \
+  mcp-vps-agent_broker-run \
+  mcp-vps-agent_operator-run \
+  mcp-vps-agent_zitadel-postgres-data \
+  mcp-vps-agent_zitadel-bootstrap \
+  mcp-vps-agent_vps-agent-letsencrypt
+do
+  if grep -Fxq -- "$volume" <<< "$volume_inventory"; then
+    owner="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$volume")" || {
+      echo "REMOVE BLOCKED: cannot inspect owner of volume before Compose purge: $volume" >&2
+      exit 1
+    }
+    if [ "$owner" != "mcp-vps-agent" ]; then
+      echo "REMOVE BLOCKED: volume not verified as Portico-owned before Compose purge: $volume" >&2
+      exit 1
+    fi
+  fi
+done
+
+# Never ignore Compose failures or discard state needed to recover a purge.
+if [ -f .env ]; then
+  "${compose[@]}" down -v --remove-orphans
+fi
+
+# A previous interrupted run can strand volumes, including operator-run.
+# Remove only fixed package volume names with the expected Compose owner.
+for volume in \
+  mcp-vps-agent_broker-run \
+  mcp-vps-agent_operator-run \
+  mcp-vps-agent_zitadel-postgres-data \
+  mcp-vps-agent_zitadel-bootstrap \
+  mcp-vps-agent_vps-agent-letsencrypt
+do
+  if docker volume inspect "$volume" >/dev/null 2>&1; then
+    owner="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$volume")"
+    if [ "$owner" != "mcp-vps-agent" ]; then
+      echo "REMOVE BLOCKED: volume is not verified as Portico-owned: $volume" >&2
+      exit 1
+    fi
+    docker volume rm "$volume" >/dev/null || {
+      echo "REMOVE INCOMPLETE: failed to remove Portico volume: $volume" >&2
+      exit 1
+    }
+  fi
+done
+
+# Only Compose-labeled private networks: the public Traefik edge is external
+# and must not be removed, including when other services share it.
+networks="$(docker network ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}')"
+while IFS= read -r network; do
+  [ -n "$network" ] || continue
+  if [ "$network" = "${VPS_AGENT_EDGE_NETWORK:-}" ] || [ "$network" = "traefik-public" ]; then
+    continue
+  fi
+  owner="$(docker network inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$network")"
+  if [ "$owner" != "mcp-vps-agent" ]; then
+    echo "REMOVE BLOCKED: unexpected network owner: $network" >&2
+    exit 1
+  fi
+  docker network rm "$network" >/dev/null || {
+    echo "REMOVE INCOMPLETE: failed to remove Portico network: $network" >&2
+    exit 1
+  }
+done <<< "$networks"
+# Final fence: a purge may not report success when an unrecognized
+# Compose-labeled volume remains. Investigate manually instead of pruning.
+remaining_volumes="$(docker volume ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}')"
+if [ -n "$remaining_volumes" ]; then
+  echo "REMOVE INCOMPLETE: project volumes remain: $remaining_volumes" >&2
+  exit 1
+fi
+remaining_networks="$(docker network ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}')"
+while IFS= read -r network; do
+  [ -n "$network" ] || continue
+  if [ "$network" != "${VPS_AGENT_EDGE_NETWORK:-}" ] && [ "$network" != "traefik-public" ]; then
+    echo "REMOVE INCOMPLETE: project network remains: $network" >&2
+    exit 1
+  fi
+done <<< "$remaining_networks"
+
+# END VERIFIED PURGE RESOURCES
+
+rm -rf -- state backups
+rm -f -- .env config/policy.yaml
+
+# These are package-owned default local build outputs. Never remove arbitrary
+# images configured by the operator or images merely used by managed workloads.
+docker image rm   mcp-vps-agent-gateway:local   mcp-vps-agent-broker:local   >/dev/null 2>&1 || true
+
+# Legacy pre-Portico scaffold. The helper uses rmdir, never rm -rf:
+# a non-empty directory is preserved rather than risking user data.
+remove_legacy_sandbox
+
+if vps_agent_is_pt_br; then
+  cat <<EOF
+
+PURGE COMPLETO CONCLUÍDO
+Artefatos locais do Portico removidos:
+  runtime/volumes
+  imagens locais padrão do Gateway/Broker (quando presentes)
+  .env
+  config/policy.yaml
+  state/
+  backups/
+  /opt/vps-agent-sandbox legado vazio (quando presente)
+Preservados:
+  aplicações, sites, bancos, imagens/contêineres de terceiros, serviços e arquivos delegados
+EOF
+else
+  cat <<EOF
+
+FULL PURGE COMPLETE
+Deleted MCP-owned local artifacts:
+  runtime/volumes
+  default local Gateway/Broker images (when present)
+  .env
+  config/policy.yaml
+  state/
+  backups/
+  empty legacy /opt/vps-agent-sandbox (when present)
+Preserved:
+  applications, sites, databases, third-party images/containers, services and delegated files
+EOF
+fi
+
+if [ "$remove_source" -eq 1 ] && [ "$source_verified" -eq 1 ]; then
+  parent="$(dirname "$repo_root")"
+  echo "$(vps_agent_text "Deleting verified Portico MCP source checkout: $repo_root" "Apagando o checkout verificado do Portico MCP: $repo_root")"
+  cd /
+  rm -rf -- "$repo_root"
+  if [ "$(basename "$parent")" = "vps-agent-lab" ]; then
+    rmdir "$parent" >/dev/null 2>&1 || true
+  fi
+  echo "$(vps_agent_text 'Portico MCP source checkout removed.' 'Checkout do Portico MCP removido.')"
+fi
+\r'}"
+    if [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]]; then
+      continue
+    fi
+    if [[ ! "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z_0-9]*)=(.*)$ ]]; then
+      echo "REMOVE BLOCKED: invalid .env assignment at line $line_number." >&2
+      return 1
+    fi
+    key="${BASH_REMATCH[2]}"
+    value="${BASH_REMATCH[3]}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    # Quote-aware literal parsing, without shell evaluation or interpolation.
+    if [[ "$value" == \"* ]]; then
+      value="${value#\"}"
+      if [[ "$value" != *\"* ]]; then
+        echo "REMOVE BLOCKED: unclosed .env quote at line $line_number." >&2
+        return 1
+      fi
+      tail="${value#*\"}"
+      value="${value%%\"*}"
+      if [[ ! "$tail" =~ ^[[:space:]]*(#.*)?$ ]]; then
+        echo "REMOVE BLOCKED: invalid .env quoted suffix at line $line_number." >&2
+        return 1
+      fi
+    elif [[ "$value" == \'* ]]; then
+      value="${value#\'}"
+      if [[ "$value" != *\'* ]]; then
+        echo "REMOVE BLOCKED: unclosed .env quote at line $line_number." >&2
+        return 1
+      fi
+      tail="${value#*\'}"
+      value="${value%%\'*}"
+      if [[ ! "$tail" =~ ^[[:space:]]*(#.*)?$ ]]; then
+        echo "REMOVE BLOCKED: invalid .env quoted suffix at line $line_number." >&2
+        return 1
+      fi
+    else
+      # A space followed by # starts a Compose-style inline comment.
+      if [[ "$value" == *" #"* ]]; then
+        value="${value%%' #' *}"
+      fi
+      value="${value%"${value##*[![:space:]]}"}"
+    fi
+    # Reject shell expressions, metacharacters and interpolation even in
+    # unused keys. No secrets or values are printed on rejection.
+    case "$value" in
+      *'
+# Never allow its values to redirect `docker compose down` to another project.
+if [ "${COMPOSE_PROJECT_NAME:-mcp-vps-agent}" != "mcp-vps-agent" ]; then
+  echo "REMOVE BLOCKED: .env selects a noncanonical Compose project." >&2
+  exit 1
+fi
+
+
+if [ "$mode" = "--purge" ] && [ "$caller_purge_confirmation" != "PURGE" ]; then
+  if [ ! -t 0 ]; then
+    echo "$(vps_agent_text 'Full purge requires VPS_AGENT_PURGE_CONFIRM=PURGE in non-interactive mode.' 'O purge completo requer VPS_AGENT_PURGE_CONFIRM=PURGE em modo não interativo.')" >&2
+    exit 1
+  fi
+  printf '%s' "$(vps_agent_text 'Type PURGE to delete this Portico MCP installation configuration/state: ' 'Digite PURGE para apagar a configuração/estado desta instalação do Portico MCP: ')"
+  read -r answer
+  if [ "$answer" != "PURGE" ]; then
+    echo "$(vps_agent_text 'Purge cancelled.' 'Purge cancelado.')"
+    exit 1
+  fi
+fi
+
+if [ "$remove_source" -eq 1 ] && [ "$caller_source_confirmation" != "REMOVE_SOURCE" ]; then
+  if [ ! -t 0 ]; then
+    echo "$(vps_agent_text 'Source deletion requires VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE in non-interactive mode.' 'A remoção do código requer VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE em modo não interativo.')" >&2
+    exit 1
+  fi
+  printf '%s' "$(vps_agent_text 'Type REMOVE_SOURCE to also delete this Git checkout: ' 'Digite REMOVE_SOURCE para apagar também este checkout Git: ')"
+  read -r source_answer
+  if [ "$source_answer" != "REMOVE_SOURCE" ]; then
+    echo "$(vps_agent_text 'Source deletion cancelled.' 'Remoção do código cancelada.')"
+    exit 1
+  fi
+fi
+
+if vps_agent_is_pt_br; then
+  cat <<EOF
+Modo de remoção: $mode
+Runtime: Gateway + Broker + proxy do pacote (quando configurado)
+Recursos gerenciados da VPS: PRESERVADOS
+Policy/auditoria do operador: $([ "$mode" = "safe" ] && echo PRESERVADAS || echo APAGADAS)
+Checkout do código: $([ "$remove_source" -eq 1 ] && echo APAGAR || echo PRESERVAR)
+EOF
+else
+  cat <<EOF
+Removal mode: $mode
+Runtime: Gateway + Broker + package proxy (when configured)
+Managed VPS resources: PRESERVED
+Operator policy/audit: $([ "$mode" = "safe" ] && echo PRESERVED || echo DELETED)
+Source checkout: $([ "$remove_source" -eq 1 ] && echo DELETE || echo PRESERVED)
+EOF
+fi
+
+
+
+project_ids="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)" || {
+  echo "REMOVE BLOCKED: cannot re-inventory project containers before mutation." >&2
+  exit 1
+}
+# Safe mode preserves the grant database. With no running project containers,
+# the Broker cannot attest revocation; a configuration or persisted state
+# may be reactivated by a later installation. STOP before any mutation.
+if [ "$mode" = "safe" ] && [ -z "$project_ids" ] && { [ -f .env ] || [ -e state ] || [ -L state ]; }; then
+  echo "REMOVE BLOCKED: Broker unavailable; cannot confirm temporary grant revocation while configuration or state persists. Restore Broker for supervised revoke-all or inspect state with operator." >&2
+  exit 1
+fi
+if [ "$mode" = "safe" ] && [ -n "$project_ids" ] && [ ! -f .env ]; then
+  echo "REMOVE BLOCKED: running project containers without .env; cannot confirm temporary grant revocation in safe mode." >&2
+  exit 1
+fi
+if [ ! -f .env ] && [ -z "$project_ids" ]; then
+  if [ "$mode" = "--purge" ]; then
+    rm -rf -- state backups
+    rm -f -- config/policy.yaml
+    docker image rm mcp-vps-agent-gateway:local mcp-vps-agent-broker:local >/dev/null 2>&1 || true
+    remove_legacy_sandbox
+  fi
+  echo "$(vps_agent_text 'Runtime already absent; removal is idempotently complete.' 'O runtime já está ausente; a remoção idempotente está concluída.')"
+  if [ "$remove_source" -eq 1 ] && [ "$source_verified" -eq 1 ]; then
+    parent="$(dirname "$repo_root")"
+    cd /
+    rm -rf -- "$repo_root"
+    if [ "$(basename "$parent")" = "vps-agent-lab" ]; then
+      rmdir "$parent" >/dev/null 2>&1 || true
+    fi
+    echo "$(vps_agent_text 'Portico MCP source checkout removed.' 'Checkout do Portico MCP removido.')"
+  fi
+  exit 0
+fi
+
+compose=(docker compose --profile operator-portal -f compose.yaml)
+if [ "${VPS_AGENT_WHOLE_HOST:-0}" = "1" ]; then
+  compose+=(-f compose.host.yaml)
+fi
+if [ "${VPS_AGENT_AUTH_MODE:-}" = "integrated" ] && [ -f compose.integrated-auth.yaml ]; then
+  compose+=(-f compose.integrated-auth.yaml)
+  if [ "${VPS_AGENT_BUNDLED_PROXY:-0}" = "1" ] && [ -f compose.integrated-auth.proxy.yaml ]; then
+    compose+=(-f compose.integrated-auth.proxy.yaml)
+  fi
+fi
+
+# A safe removal preserves the Broker grant database, so silent revoke
+# failure could resurrect temporary permissions on restart. Refuse to claim
+# success unless revocation completed. Purge erases grants with Broker state.
+if [ -f .env ] && [ -n "$project_ids" ]; then
+  echo "$(vps_agent_text 'Revoking temporary grants before shutdown...' 'Revogando autorizações temporárias antes do desligamento...')"
+  if ! docker compose exec -T broker /usr/local/bin/vps-agent revoke-all --socket /run/vps-agent/broker.sock >/dev/null 2>&1; then
+    if [ "$mode" = "safe" ]; then
+      echo "REMOVE BLOCKED: temporary grant revocation was not confirmed; safe removal cannot preserve potentially live grants." >&2
+      exit 1
+    fi
+    echo "REMOVE NOTICE: revoke-all not confirmed; full purge must complete and destroy Broker state before removal can be accepted." >&2
+  fi
+fi
+
+if [ -f .env ]; then
+  old_admin="${VPS_AGENT_ADMIN_TOKEN:-}"
+  old_static="${VPS_AGENT_STATIC_TOKEN:-}"
+  new_admin="$(openssl rand -hex 32)"
+  new_static="$(openssl rand -hex 32)"
+  python3 - .env "$old_admin" "$new_admin" "$old_static" "$new_static" <<'PY'
+import pathlib, sys
+p=pathlib.Path(sys.argv[1])
+text=p.read_text()
+old_admin,new_admin,old_static,new_static=sys.argv[2:]
+if old_admin: text=text.replace(old_admin,new_admin)
+if old_static: text=text.replace(old_static,new_static)
+p.write_text(text)
+PY
+  chmod 600 .env
+  echo "$(vps_agent_text 'Local admin/static credentials rotated.' 'Credenciais locais admin/static foram rotacionadas.')"
+fi
+
+# BEGIN PROFILE-AWARE REMOVAL
+# The operator-portal profile is explicitly enabled in the Compose down
+# command. If Compose misses a project container, revalidate both labels
+# before removing that individual container (never a global prune).
+echo "$(vps_agent_text 'Stopping Portico MCP containers...' 'Parando os contêineres do Portico MCP...')"
+down_failed=0
+if [ -f .env ]; then
+  "${compose[@]}" down --remove-orphans || down_failed=1
+else
+  down_failed=1
+fi
+
+left="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)"
+if [ -n "$left" ]; then
+  echo "$(vps_agent_text 'Cleaning up remaining verified Portico profile containers...' 'Removendo contêineres restantes dos perfis do Portico após verificar propriedade...')"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    [[ "$id" =~ ^[0-9a-f]{12,64}$ ]] || { echo "REMOVE BLOCKED: unexpected container ID." >&2; exit 1; }
+    owner="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$id")"
+    project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$id")"
+    if [ "$owner" != "$(pwd -P)" ] || [ "$project" != "mcp-vps-agent" ]; then
+      echo "REMOVE BLOCKED: refusing to remove a container from another checkout." >&2
+      exit 1
+    fi
+    docker rm -f -- "$id" >/dev/null
+  done <<< "$left"
+  if [ -f .env ]; then
+    "${compose[@]}" down --remove-orphans
+    down_failed=0
+  fi
+elif [ "$down_failed" -eq 1 ] && [ -f .env ]; then
+  "${compose[@]}" down --remove-orphans
+  down_failed=0
+fi
+
+left="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)"
+if [ -n "$left" ]; then
+  echo "$(vps_agent_text "Removal incomplete: package containers still exist: $left" "Remoção incompleta: ainda existem contêineres do pacote: $left")" >&2
+  exit 1
+fi
+# END PROFILE-AWARE REMOVAL
+if [ -n "${VPS_AGENT_PUBLIC_URL:-}" ]; then
+  code="$(curl --silent --show-error --max-time 5 --output /dev/null --write-out '%{http_code}' "${VPS_AGENT_PUBLIC_URL}" 2>/dev/null || true)"
+  case "$code" in
+    000|"")
+      echo "$(vps_agent_text 'Public MCP endpoint is no longer reachable from this host.' 'O endpoint MCP público não está mais acessível a partir deste host.')"
+      ;;
+    404|410)
+      echo "$(vps_agent_text "Public MCP route is gone (HTTP $code from the remaining edge proxy)." "A rota MCP pública foi removida (HTTP $code no proxy de borda remanescente).")"
+      ;;
+    *)
+      echo "Removal incomplete: the MCP URL still returned HTTP $code instead of disappearing." >&2
+      echo "$(vps_agent_text 'Check for a stale proxy route before considering removal complete.' 'Verifique uma possível rota antiga no proxy antes de considerar a remoção concluída.')" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+if [ "$mode" = "safe" ]; then
+  if vps_agent_is_pt_br; then
+    cat <<'EOF'
+
+REMOÇÃO SEGURA CONCLUÍDA
+Removidos:
+  runtime Gateway/Broker/proxy do pacote
+  autorizações temporárias ativas
+Invalidadas:
+  credenciais bearer locais admin/static anteriores
+Preservados:
+  .env (com credenciais locais rotacionadas)
+  config/policy.yaml
+  state/ auditoria e histórico de operações
+  estado da identidade integrada
+  todos os recursos da VPS que o Portico podia gerenciar
+EOF
+  else
+    cat <<'EOF'
+
+SAFE REMOVE COMPLETE
+Removed:
+  Gateway/Broker/package proxy runtime
+  active temporary grants
+Invalidated:
+  previous local admin/static bearer credentials
+Preserved:
+  .env (with rotated local credentials)
+  config/policy.yaml
+  state/ audit and operation history
+  integrated identity state on safe remove
+  every VPS resource Portico MCP was allowed to manage
+EOF
+  fi
+  exit 0
+fi
+
+# BEGIN VERIFIED PURGE RESOURCES
+# Compose down -v can delete project-named volumes before a later ownership
+# check. Validate every named removal target BEFORE invoking down -v. A
+# foreign-owned or unlabeled volume is never a safe purge target.
+volume_inventory="$(docker volume ls --format '{{.Name}}')" || {
+  echo "REMOVE BLOCKED: cannot inventory Docker volumes before Compose purge." >&2
+  exit 1
+}
+for volume in \
+  mcp-vps-agent_broker-run \
+  mcp-vps-agent_operator-run \
+  mcp-vps-agent_zitadel-postgres-data \
+  mcp-vps-agent_zitadel-bootstrap \
+  mcp-vps-agent_vps-agent-letsencrypt
+do
+  if grep -Fxq -- "$volume" <<< "$volume_inventory"; then
+    owner="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$volume")" || {
+      echo "REMOVE BLOCKED: cannot inspect owner of volume before Compose purge: $volume" >&2
+      exit 1
+    }
+    if [ "$owner" != "mcp-vps-agent" ]; then
+      echo "REMOVE BLOCKED: volume not verified as Portico-owned before Compose purge: $volume" >&2
+      exit 1
+    fi
+  fi
+done
+
+# Never ignore Compose failures or discard state needed to recover a purge.
+if [ -f .env ]; then
+  "${compose[@]}" down -v --remove-orphans
+fi
+
+# A previous interrupted run can strand volumes, including operator-run.
+# Remove only fixed package volume names with the expected Compose owner.
+for volume in \
+  mcp-vps-agent_broker-run \
+  mcp-vps-agent_operator-run \
+  mcp-vps-agent_zitadel-postgres-data \
+  mcp-vps-agent_zitadel-bootstrap \
+  mcp-vps-agent_vps-agent-letsencrypt
+do
+  if docker volume inspect "$volume" >/dev/null 2>&1; then
+    owner="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$volume")"
+    if [ "$owner" != "mcp-vps-agent" ]; then
+      echo "REMOVE BLOCKED: volume is not verified as Portico-owned: $volume" >&2
+      exit 1
+    fi
+    docker volume rm "$volume" >/dev/null || {
+      echo "REMOVE INCOMPLETE: failed to remove Portico volume: $volume" >&2
+      exit 1
+    }
+  fi
+done
+
+# Only Compose-labeled private networks: the public Traefik edge is external
+# and must not be removed, including when other services share it.
+networks="$(docker network ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}')"
+while IFS= read -r network; do
+  [ -n "$network" ] || continue
+  if [ "$network" = "${VPS_AGENT_EDGE_NETWORK:-}" ] || [ "$network" = "traefik-public" ]; then
+    continue
+  fi
+  owner="$(docker network inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$network")"
+  if [ "$owner" != "mcp-vps-agent" ]; then
+    echo "REMOVE BLOCKED: unexpected network owner: $network" >&2
+    exit 1
+  fi
+  docker network rm "$network" >/dev/null || {
+    echo "REMOVE INCOMPLETE: failed to remove Portico network: $network" >&2
+    exit 1
+  }
+done <<< "$networks"
+# Final fence: a purge may not report success when an unrecognized
+# Compose-labeled volume remains. Investigate manually instead of pruning.
+remaining_volumes="$(docker volume ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}')"
+if [ -n "$remaining_volumes" ]; then
+  echo "REMOVE INCOMPLETE: project volumes remain: $remaining_volumes" >&2
+  exit 1
+fi
+remaining_networks="$(docker network ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}')"
+while IFS= read -r network; do
+  [ -n "$network" ] || continue
+  if [ "$network" != "${VPS_AGENT_EDGE_NETWORK:-}" ] && [ "$network" != "traefik-public" ]; then
+    echo "REMOVE INCOMPLETE: project network remains: $network" >&2
+    exit 1
+  fi
+done <<< "$remaining_networks"
+
+# END VERIFIED PURGE RESOURCES
+
+rm -rf -- state backups
+rm -f -- .env config/policy.yaml
+
+# These are package-owned default local build outputs. Never remove arbitrary
+# images configured by the operator or images merely used by managed workloads.
+docker image rm   mcp-vps-agent-gateway:local   mcp-vps-agent-broker:local   >/dev/null 2>&1 || true
+
+# Legacy pre-Portico scaffold. The helper uses rmdir, never rm -rf:
+# a non-empty directory is preserved rather than risking user data.
+remove_legacy_sandbox
+
+if vps_agent_is_pt_br; then
+  cat <<EOF
+
+PURGE COMPLETO CONCLUÍDO
+Artefatos locais do Portico removidos:
+  runtime/volumes
+  imagens locais padrão do Gateway/Broker (quando presentes)
+  .env
+  config/policy.yaml
+  state/
+  backups/
+  /opt/vps-agent-sandbox legado vazio (quando presente)
+Preservados:
+  aplicações, sites, bancos, imagens/contêineres de terceiros, serviços e arquivos delegados
+EOF
+else
+  cat <<EOF
+
+FULL PURGE COMPLETE
+Deleted MCP-owned local artifacts:
+  runtime/volumes
+  default local Gateway/Broker images (when present)
+  .env
+  config/policy.yaml
+  state/
+  backups/
+  empty legacy /opt/vps-agent-sandbox (when present)
+Preserved:
+  applications, sites, databases, third-party images/containers, services and delegated files
+EOF
+fi
+
+if [ "$remove_source" -eq 1 ] && [ "$source_verified" -eq 1 ]; then
+  parent="$(dirname "$repo_root")"
+  echo "$(vps_agent_text "Deleting verified Portico MCP source checkout: $repo_root" "Apagando o checkout verificado do Portico MCP: $repo_root")"
+  cd /
+  rm -rf -- "$repo_root"
+  if [ "$(basename "$parent")" = "vps-agent-lab" ]; then
+    rmdir "$parent" >/dev/null 2>&1 || true
+  fi
+  echo "$(vps_agent_text 'Portico MCP source checkout removed.' 'Checkout do Portico MCP removido.')"
+fi
+*|*'\`'*|*';'*|*'|'*|*'<'*|*'>'*)
+        echo "REMOVE BLOCKED: unsafe shell syntax in .env at line $line_number." >&2
+        return 1 ;;
+    esac
+    # Only values needed by removal are placed in this process's environment.
+    # Other installation keys remain in .env for Docker Compose to interpret.
+    case "$key" in
+      COMPOSE_PROJECT_NAME|VPS_AGENT_WHOLE_HOST|VPS_AGENT_AUTH_MODE|VPS_AGENT_BUNDLED_PROXY|VPS_AGENT_ADMIN_TOKEN|VPS_AGENT_STATIC_TOKEN|VPS_AGENT_PUBLIC_URL|VPS_AGENT_EDGE_NETWORK)
+        printf -v "$key" '%s' "$value"
+        export "$key" ;;
+    esac
+  done < .env
+}
+remove_load_env_literals || exit 1
+
+# The checkout .env may define COMPOSE_PROJECT_NAME: check AGAIN after loading.
 # Never allow its values to redirect `docker compose down` to another project.
 if [ "${COMPOSE_PROJECT_NAME:-mcp-vps-agent}" != "mcp-vps-agent" ]; then
   echo "REMOVE BLOCKED: .env selects a noncanonical Compose project." >&2
