@@ -1,0 +1,118 @@
+name: uninstall-package-e2e
+
+on:
+  pull_request:
+    paths:
+      - "scripts/remove.sh"
+      - "scripts/lib/product.sh"
+      - "tests/scripts/test_remove_package_e2e.py"
+      - ".github/workflows/uninstall-package-e2e.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  disposable-purge:
+    name: isolated Docker profile + volume purge
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Simulated Docker ownership, preview and failure gates
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests/scripts -p 'test_remove_package_e2e.py' -v
+          python3 -m unittest discover -s tests/scripts -p 'test_remove_project_ownership.py' -v
+          bash -n scripts/remove.sh
+      - name: Real isolated Docker Compose profile removal
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$(mktemp -d "$RUNNER_TEMP/portico-uninstall-e2e.XXXXXXXX")"
+          mkdir -p "$fixture/scripts/lib" "$fixture/config"
+          cp scripts/remove.sh "$fixture/scripts/remove.sh"
+          cp scripts/lib/product.sh "$fixture/scripts/lib/product.sh"
+          cp VERSION "$fixture/VERSION"
+          cat >"$fixture/compose.yaml" <<'YAML'
+          name: mcp-vps-agent
+          services:
+            operator-portal:
+              profiles: ["operator-portal"]
+              image: alpine:3.22
+              command: ["sleep", "3600"]
+              volumes:
+                - operator-run:/var/lib/portico
+          volumes:
+            operator-run:
+          YAML
+          cat >"$fixture/.env" <<'ENV'
+          VPS_AGENT_ADMIN_TOKEN=e2e-admin-dummy
+          VPS_AGENT_STATIC_TOKEN=e2e-static-dummy
+          VPS_AGENT_LANG=en
+          VPS_AGENT_EDGE_NETWORK=portico-e2e-external
+          ENV
+
+          if [ -n "$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)" ]; then
+            echo "E2E BLOCKED: runner already has a project with canonical name" >&2
+            exit 1
+          fi
+
+          docker network create portico-e2e-external >/dev/null
+          cd "$fixture"
+          docker compose --profile operator-portal up -d
+          docker volume create \
+            --label com.docker.compose.project=mcp-vps-agent \
+            --label com.docker.compose.volume=zitadel-bootstrap \
+            mcp-vps-agent_zitadel-bootstrap >/dev/null
+
+          test -n "$(docker ps -q --filter label=com.docker.compose.project=mcp-vps-agent)"
+          docker volume inspect mcp-vps-agent_operator-run >/dev/null
+          docker volume inspect mcp-vps-agent_zitadel-bootstrap >/dev/null
+
+          bash scripts/remove.sh --purge --dry-run >"$RUNNER_TEMP/uninstall-preview.log"
+          grep -q 'REMOVAL PREVIEW' "$RUNNER_TEMP/uninstall-preview.log"
+          # Dry run must not stop or delete the optional profile container.
+          test -n "$(docker ps -q --filter label=com.docker.compose.project=mcp-vps-agent)"
+
+          VPS_AGENT_PURGE_CONFIRM=PURGE bash scripts/remove.sh --purge
+
+          test -z "$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)"
+          if docker volume inspect mcp-vps-agent_operator-run >/dev/null 2>&1; then
+            echo 'E2E FAIL: operator-run survived purge' >&2
+            exit 1
+          fi
+          if docker volume inspect mcp-vps-agent_zitadel-bootstrap >/dev/null 2>&1; then
+            echo 'E2E FAIL: ZITADEL orphan volume survived purge' >&2
+            exit 1
+          fi
+          test -z "$(docker network ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}')"
+          docker network inspect portico-e2e-external >/dev/null
+          test ! -e .env
+          test ! -e config/policy.yaml
+
+          # A second invocation is safe after a clean purge.
+          VPS_AGENT_PURGE_CONFIRM=PURGE bash scripts/remove.sh --purge
+          docker network inspect portico-e2e-external >/dev/null
+          docker network rm portico-e2e-external >/dev/null
+          echo 'EPHEMERAL PORTICO UNINSTALL PACKAGE: PASS'
+      - name: Build reviewed uninstall candidate
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/uninstall-staging/scripts"
+          cp scripts/remove.sh "$RUNNER_TEMP/uninstall-staging/scripts/remove.sh"
+          printf 'SOURCE_COMMIT=%s\n' "$GITHUB_SHA" >"$RUNNER_TEMP/uninstall-staging/SOURCE_COMMIT"
+          tar -czf "$RUNNER_TEMP/portico-uninstall-candidate.tar.gz" \
+            -C "$RUNNER_TEMP/uninstall-staging" scripts/remove.sh SOURCE_COMMIT
+          (cd "$RUNNER_TEMP" && sha256sum portico-uninstall-candidate.tar.gz > portico-uninstall-candidate.tar.gz.sha256)
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: portico-uninstall-candidate
+          path: |
+            ${{ runner.temp }}/portico-uninstall-candidate.tar.gz
+            ${{ runner.temp }}/portico-uninstall-candidate.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
