@@ -94,7 +94,337 @@ jobs:
           # Runs only against GitHub's disposable workspace, never the operator VPS.
           sudo env "PATH=$PATH" "GOCACHE=$RUNNER_TEMP/portico-root-go-cache" \
             "$(command -v go)" test -count=1 -v ./internal/securefs \
-            -run 'TestAtomicWrite(HostOwner|PreservesExistingDifferentOwner|SymlinkTargetRefusedWithoutReplacement|OwnerPreservesForeignRootBoundary)      - name: Build native commands
+            -run 'TestAtomicWrite(HostOwner|PreservesExistingDifferentOwner|SymlinkTargetRefusedWithoutReplacement|OwnerPreservesForeignRootBoundary)
+        run: go build ./cmd/...
+      - name: Build release artifacts
+        run: |
+          mkdir -p dist/linux-amd64 dist/linux-arm64
+          for arch in amd64 arm64; do
+            for cmd in vps-agent-gateway vps-agent-broker vps-agent vps-agent-mcp-call portico-cloud-node; do
+              CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags='-s -w' -o "dist/linux-$arch/$cmd" "./cmd/$cmd"
+            done
+          done
+          for arch in amd64 arm64; do
+            cp LICENSE README.md README.pt-BR.md "dist/linux-$arch/"
+            tar -C "dist/linux-$arch" -czf "dist/vps-agent-linux-$arch.tar.gz" .
+            sha256sum "dist/vps-agent-linux-$arch.tar.gz" > "dist/vps-agent-linux-$arch.tar.gz.sha256"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vps-agent-linux-binaries
+          path: dist/
+          if-no-files-found: error
+
+  cloud-node-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build Cloud node connector image
+        run: docker build --target cloud-node -t portico-cloud-node:ci .
+
+  docker-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go mod download
+      - name: Docker typed-operation smoke
+        env:
+          VPS_AGENT_DOCKER_SMOKE: '1'
+        run: go test -count=1 -v ./internal/broker -run TestDockerCLISmoke
+
+  systemd-unit-verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Provide placeholder executables
+        run: |
+          sudo install -m 0755 /usr/bin/true /usr/local/bin/vps-agent-gateway
+          sudo install -m 0755 /usr/bin/true /usr/local/bin/vps-agent-broker
+      - name: Verify unit syntax and sandbox directives
+        run: systemd-analyze verify tests/fixtures/systemd/vps-agent-gateway.service tests/fixtures/systemd/vps-agent-broker.service
+
+  architecture-simulation:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - run: python sim/architecture_sim.py
+
+  vuln:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go mod download
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./...
+
+  source-security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Gosec (Go 1.27.2 export-data compatible)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep the security scanner's dependency graph outside the product.
+          # Gosec 2.29.0 pins x/tools 0.49, which cannot read Go 1.27.2
+          # export-data version 5. x/tools 0.51.0 supports the new format.
+          mkdir -p "$RUNNER_TEMP/portico-gosec-build" "$RUNNER_TEMP/portico-gosec-bin"
+          (
+            cd "$RUNNER_TEMP/portico-gosec-build"
+            go mod init portico-gosec-compat
+            go get github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+            go get golang.org/x/tools@v0.51.0
+            go build -o "$RUNNER_TEMP/portico-gosec-bin/gosec" github.com/securego/gosec/v2/cmd/gosec
+          )
+          "$RUNNER_TEMP/portico-gosec-bin/gosec" -fmt=json -out=gosec.json ./...
+          # Fail closed if any package was skipped due to a type/SSA error.
+          python3 - <<'PY'
+          import json
+          report=json.load(open("gosec.json"))
+          errors=report.get("Golang errors") or {}
+          if errors:
+              print(f"SECURITY BLOCKED: {len(errors)} Go source paths had type errors; Gosec scan incomplete")
+              raise SystemExit(1)
+          print("GOSEC SSA: all packages type-checked, no source scanner failures")
+          PY
+      - name: Bounded fuzzing
+        run: |
+          go test ./internal/securefs -run='^$' -fuzz=FuzzSelectRootNeverEscapes -fuzztime=10s
+          go test ./internal/policy -run='^$' -fuzz=FuzzPolicyLoadNeverPanics -fuzztime=10s
+      - name: Secret scan
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@v8.24.3
+          set +e
+          gitleaks dir . --redact --exit-code=2 --report-format=json --report-path=results.json
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            python3 - <<'PY'
+          import json
+          data=json.load(open("results.json"))
+          for x in data:
+              print(f"{x.get('RuleID','unknown')} {x.get('File','?')}:{x.get('StartLine','?')}")
+          PY
+            exit "$status"
+          fi
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-security
+          path: |
+            gosec.json
+            results.json
+          if-no-files-found: ignore
+
+  systemd-job-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Create sandbox execution user
+        run: |
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin vps-agent-exec 2>/dev/null || true
+      - run: go mod download
+      - name: Run real transient systemd job
+        run: |
+          sudo --preserve-env=PATH env \
+            VPS_AGENT_SYSTEMD_JOB_SMOKE=1 \
+            GOPATH="$GOPATH" \
+            GOCACHE="$GOCACHE" \
+            GOMODCACHE="$GOMODCACHE" \
+            go test -count=1 -run TestSystemdRunnerSmoke ./internal/jobs
+
+      - name: Build native commands
+        run: go build ./cmd/...
+      - name: Build release artifacts
+        run: |
+          mkdir -p dist/linux-amd64 dist/linux-arm64
+          for arch in amd64 arm64; do
+            for cmd in vps-agent-gateway vps-agent-broker vps-agent vps-agent-mcp-call portico-cloud-node; do
+              CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags='-s -w' -o "dist/linux-$arch/$cmd" "./cmd/$cmd"
+            done
+          done
+          for arch in amd64 arm64; do
+            cp LICENSE README.md README.pt-BR.md "dist/linux-$arch/"
+            tar -C "dist/linux-$arch" -czf "dist/vps-agent-linux-$arch.tar.gz" .
+            sha256sum "dist/vps-agent-linux-$arch.tar.gz" > "dist/vps-agent-linux-$arch.tar.gz.sha256"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vps-agent-linux-binaries
+          path: dist/
+          if-no-files-found: error
+
+  cloud-node-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build Cloud node connector image
+        run: docker build --target cloud-node -t portico-cloud-node:ci .
+
+  docker-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go mod download
+      - name: Docker typed-operation smoke
+        env:
+          VPS_AGENT_DOCKER_SMOKE: '1'
+        run: go test -count=1 -v ./internal/broker -run TestDockerCLISmoke
+
+  systemd-unit-verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Provide placeholder executables
+        run: |
+          sudo install -m 0755 /usr/bin/true /usr/local/bin/vps-agent-gateway
+          sudo install -m 0755 /usr/bin/true /usr/local/bin/vps-agent-broker
+      - name: Verify unit syntax and sandbox directives
+        run: systemd-analyze verify tests/fixtures/systemd/vps-agent-gateway.service tests/fixtures/systemd/vps-agent-broker.service
+
+  architecture-simulation:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - run: python sim/architecture_sim.py
+
+  vuln:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go mod download
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./...
+
+  source-security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Gosec (Go 1.27.2 export-data compatible)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep the security scanner's dependency graph outside the product.
+          # Gosec 2.29.0 pins x/tools 0.49, which cannot read Go 1.27.2
+          # export-data version 5. x/tools 0.51.0 supports the new format.
+          mkdir -p "$RUNNER_TEMP/portico-gosec-build" "$RUNNER_TEMP/portico-gosec-bin"
+          (
+            cd "$RUNNER_TEMP/portico-gosec-build"
+            go mod init portico-gosec-compat
+            go get github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+            go get golang.org/x/tools@v0.51.0
+            go build -o "$RUNNER_TEMP/portico-gosec-bin/gosec" github.com/securego/gosec/v2/cmd/gosec
+          )
+          "$RUNNER_TEMP/portico-gosec-bin/gosec" -fmt=json -out=gosec.json ./...
+          # Fail closed if any package was skipped due to a type/SSA error.
+          python3 - <<'PY'
+          import json
+          report=json.load(open("gosec.json"))
+          errors=report.get("Golang errors") or {}
+          if errors:
+              print(f"SECURITY BLOCKED: {len(errors)} Go source paths had type errors; Gosec scan incomplete")
+              raise SystemExit(1)
+          print("GOSEC SSA: all packages type-checked, no source scanner failures")
+          PY
+      - name: Bounded fuzzing
+        run: |
+          go test ./internal/securefs -run='^$' -fuzz=FuzzSelectRootNeverEscapes -fuzztime=10s
+          go test ./internal/policy -run='^$' -fuzz=FuzzPolicyLoadNeverPanics -fuzztime=10s
+      - name: Secret scan
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@v8.24.3
+          set +e
+          gitleaks dir . --redact --exit-code=2 --report-format=json --report-path=results.json
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            python3 - <<'PY'
+          import json
+          data=json.load(open("results.json"))
+          for x in data:
+              print(f"{x.get('RuleID','unknown')} {x.get('File','?')}:{x.get('StartLine','?')}")
+          PY
+            exit "$status"
+          fi
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-security
+          path: |
+            gosec.json
+            results.json
+          if-no-files-found: ignore
+
+  systemd-job-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Create sandbox execution user
+        run: |
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin vps-agent-exec 2>/dev/null || true
+      - run: go mod download
+      - name: Run real transient systemd job
+        run: |
+          sudo --preserve-env=PATH env \
+            VPS_AGENT_SYSTEMD_JOB_SMOKE=1 \
+            GOPATH="$GOPATH" \
+            GOCACHE="$GOCACHE" \
+            GOMODCACHE="$GOMODCACHE" \
+            go test -count=1 -run TestSystemdRunnerSmoke ./internal/jobs
+
+      - name: Build native commands
         run: go build ./cmd/...
       - name: Build release artifacts
         run: |
