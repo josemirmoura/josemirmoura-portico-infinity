@@ -91,10 +91,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Runs only against GitHub's disposable workspace, never the operator VPS.
+          # All TestAtomicWrite tests, including privileged host UID/GID mapping.
           sudo env "PATH=$PATH" "GOCACHE=$RUNNER_TEMP/portico-root-go-cache" \
-            "$(command -v go)" test -count=1 -v ./internal/securefs \
-            -run 'TestAtomicWrite(HostOwner|PreservesExistingDifferentOwner|SymlinkTargetRefusedWithoutReplacement|OwnerPreservesForeignRootBoundary)
+            "$(command -v go)" test -count=1 -v ./internal/securefs -run TestAtomicWrite
+      - name: Build native commands
         run: go build ./cmd/...
       - name: Build release artifacts
         run: |
