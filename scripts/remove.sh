@@ -222,7 +222,70 @@ Source checkout: $([ "$remove_source" -eq 1 ] && echo DELETE || echo PRESERVED)
 EOF
 fi
 
+# BEGIN PRE-MUTATION PURGE SAFETY GATE
+# All project-volume ownership and local data guards run before credential
+# rotation, container stops, Compose down or any rm -rf.
+if [ "$mode" = "--purge" ]; then
+  expected_volumes="$(docker volume ls --format '{{.Name}}')" || {
+    echo "REMOVE BLOCKED: cannot preflight Docker volume inventory." >&2
+    exit 1
+  }
+  for volume in \
+    mcp-vps-agent_broker-run \
+    mcp-vps-agent_operator-run \
+    mcp-vps-agent_zitadel-postgres-data \
+    mcp-vps-agent_zitadel-bootstrap \
+    mcp-vps-agent_vps-agent-letsencrypt
+  do
+    if grep -Fxq -- "$volume" <<< "$expected_volumes"; then
+      owner="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$volume")" || {
+        echo "REMOVE BLOCKED: cannot inspect volume owner before any mutation: $volume" >&2
+        exit 1
+      }
+      if [ "$owner" != "mcp-vps-agent" ]; then
+        echo "REMOVE BLOCKED: foreign or unlabeled project-named volume BEFORE any mutation: $volume" >&2
+        exit 1
+      fi
+    fi
+  done
+  checkout_uid="$(stat -c '%u' -- .)" || exit 1
+  mounted_paths="$(findmnt --kernel --raw --noheadings --output TARGET)" || {
+    echo "REMOVE BLOCKED: cannot inventory active mounts before destructive purge." >&2
+    exit 1
+  }
+  for target in state backups; do
+    if [ -L "$target" ]; then
+      echo "REMOVE BLOCKED: local purge target is a symlink: $target" >&2
+      exit 1
+    fi
+    if [ -e "$target" ]; then
+      if [ ! -d "$target" ]; then
+        echo "REMOVE BLOCKED: local purge target is not a directory: $target" >&2
+        exit 1
+      fi
+      target_uid="$(stat -c '%u' -- "$target")" || exit 1
+      if [ "$target_uid" != "$checkout_uid" ] && [ "$target_uid" != "0" ]; then
+        echo "REMOVE BLOCKED: local purge target has foreign UID: $target" >&2
+        exit 1
+      fi
+      while IFS= read -r mounted_path; do
+        case "$mounted_path" in
+          "$(pwd -P)/$target"|"$(pwd -P)/$target/"*)
+            echo "REMOVE BLOCKED: mountpoint at or beneath purge target: $target" >&2
+            exit 1
+            ;;
+        esac
+      done <<< "$mounted_paths"
+    fi
+  done
+fi
+# END PRE-MUTATION PURGE SAFETY GATE
+
 project_ids="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent 2>/dev/null || true)"
+if [ "$mode" = "safe" ] && [ -n "$project_ids" ] && [ ! -f .env ]; then
+  echo "REMOVE BLOCKED: running project containers without .env; cannot confirm temporary grant revocation in safe mode." >&2
+  exit 1
+fi
 if [ ! -f .env ] && [ -z "$project_ids" ]; then
   if [ "$mode" = "--purge" ]; then
     rm -rf -- state backups
