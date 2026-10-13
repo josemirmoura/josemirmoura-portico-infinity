@@ -262,23 +262,39 @@ remove_load_literal_env() {
   local entries key value
   [ -e .env ] || { [ ! -L .env ] || { echo "REMOVE BLOCKED: .env is a symlink." >&2; return 1; }; return 0; }
   entries="$(python3 - .env <<'PY'
+import os
 import pathlib
 import re
+import stat
 import sys
 
 p = pathlib.Path(sys.argv[1])
-if p.is_symlink() or not p.is_file():
-    sys.exit("REMOVE BLOCKED: .env must be a regular non-symlink file.")
 allowed = {
     "COMPOSE_PROJECT_NAME", "VPS_AGENT_WHOLE_HOST", "VPS_AGENT_AUTH_MODE",
     "VPS_AGENT_BUNDLED_PROXY", "VPS_AGENT_ADMIN_TOKEN", "VPS_AGENT_STATIC_TOKEN",
     "VPS_AGENT_PUBLIC_URL", "VPS_AGENT_EDGE_NETWORK",
 }
 values = {}
+fd = -1
 try:
-    lines = p.read_text(encoding="utf-8").splitlines()
+    # Pin the file descriptor with O_NOFOLLOW so a concurrent symlink swap
+    # cannot redirect a privileged parser to a different file.
+    fd = os.open(p, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        sys.exit("REMOVE BLOCKED: .env must be a regular non-symlink file.")
+    if info.st_size > 256 * 1024:
+        sys.exit("REMOVE BLOCKED: .env exceeds maximum safe size.")
+    with os.fdopen(fd, "r", encoding="utf-8") as stream:
+        fd = -1
+        lines = stream.read(256 * 1024 + 1).splitlines()
+    if sum(len(line.encode("utf-8")) + 1 for line in lines) > 256 * 1024:
+        sys.exit("REMOVE BLOCKED: .env exceeds maximum safe size.")
 except (OSError, UnicodeError):
-    sys.exit("REMOVE BLOCKED: cannot read .env as UTF-8.")
+    sys.exit("REMOVE BLOCKED: .env must be a regular non-symlink file or valid UTF-8.")
+finally:
+    if fd >= 0:
+        os.close(fd)
 for n, line in enumerate(lines, 1):
     if not line.strip() or line.lstrip().startswith("#"):
         continue
