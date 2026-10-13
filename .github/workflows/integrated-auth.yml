@@ -155,32 +155,32 @@ jobs:
           }
           test "$(get_recovery_user)" = "ABSENT"
           python3 - "$RECOVERY_ID" <<'PY' >"$RECOVERY_DIR/create-body.json"
-import json,os,sys
-print(json.dumps({
-  "userId":sys.argv[1], "username":"ci-recovery",
-  "profile":{"givenName":"CI","familyName":"Recovery",
-             "displayName":"CI Recovery","preferredLanguage":"en"},
-  "email":{"email":"ci-recovery@example.invalid","isVerified":True},
-  "password":{"password":os.environ["CI_OPERATOR_SECRET"],"changeRequired":False}
-}))
-PY
+          import json,os,sys
+          print(json.dumps({
+            "userId":sys.argv[1], "username":"ci-recovery",
+            "profile":{"givenName":"CI","familyName":"Recovery",
+                       "displayName":"CI Recovery","preferredLanguage":"en"},
+            "email":{"email":"ci-recovery@example.invalid","isVerified":True},
+            "password":{"password":os.environ["CI_OPERATOR_SECRET"],"changeRequired":False}
+          }))
+          PY
           curl_ci -X POST http://zitadel-api:8080/v2/users/human \
             -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" \
             --data-binary @- <"$RECOVERY_DIR/create-body.json" >"$RECOVERY_DIR/create-response.json"
           python3 - "$RECOVERY_DIR/create-response.json" "$RECOVERY_ID" <<'PY'
-import json,sys
-assert json.load(open(sys.argv[1])).get("userId")==sys.argv[2]
-PY
+          import json,sys
+          assert json.load(open(sys.argv[1])).get("userId")==sys.argv[2]
+          PY
           # Simulate crash after HTTP 200 but BEFORE .env or marker commit.
           test "$(python3 scripts/oauth-operator-reconcile.py prepare "$RECOVERY_JOURNAL" \
             mcp.example.invalid ci-recovery ci-recovery@example.invalid)" = "$RECOVERY_ID"
           test "$(get_recovery_user)" = "FOUND"
           python3 - "$RECOVERY_MARKER" "$RECOVERY_ID" <<'PY'
-import json,sys
-with open(sys.argv[1],"w") as stream:
-    json.dump({"domain":"mcp.example.invalid","subject":sys.argv[2],
-               "username":"ci-recovery","email":"ci-recovery@example.invalid"},stream)
-PY
+          import json,sys
+          with open(sys.argv[1],"w") as stream:
+              json.dump({"domain":"mcp.example.invalid","subject":sys.argv[2],
+                         "username":"ci-recovery","email":"ci-recovery@example.invalid"},stream)
+          PY
           python3 scripts/oauth-operator-reconcile.py finalize \
             "$RECOVERY_JOURNAL" "$RECOVERY_MARKER" "$RECOVERY_ID"
           test ! -e "$RECOVERY_JOURNAL"
