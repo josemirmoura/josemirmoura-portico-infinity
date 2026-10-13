@@ -29,9 +29,14 @@ class AIClientConnectionGuideTests(unittest.TestCase):
         for name in ("connect-ai-clients.md", "connect-ai-clients.pt-BR.md"):
             with self.subTest(name=name):
                 self.assertIn(
-                    "https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/main/docs/" + name,
+                    "https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/${documentation_ref}/docs/" + name,
                     source,
                 )
+
+    def test_docs_are_pinned_to_running_checkout(self):
+        source = CONNECT.read_text(encoding="utf-8")
+        self.assertIn("git rev-parse --verify HEAD", source)
+        self.assertNotIn("blob/main/docs/connect-ai-clients.", source)
 
     def test_chatgpt_audit_gate_still_required(self):
         source = CONNECT.read_text(encoding="utf-8")
