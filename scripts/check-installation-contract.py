@@ -309,7 +309,11 @@ ux_requirements = {
         "Traefik existente detectado e será reutilizado",
     ],
     "scripts/connect-chatgpt.sh": [
-        "A VPS está pronta. Agora falta conectar o Portico MCP ao ChatGPT.",
+        "Guia de conexão no GitHub (ChatGPT, Claude, Cursor, VS Code/Copilot):",
+        "GitHub connection guide (ChatGPT, Claude, Cursor, VS Code/Copilot):",
+        "https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/main/docs/connect-ai-clients.pt-BR.md",
+        "https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/main/docs/connect-ai-clients.md",
+        "Para finalizar o E2E Community atual, conecte o ChatGPT e solicite:",
         "[Enter] verificar conexão",
         "--baseline-only",
         "--after-seq",
@@ -388,6 +392,8 @@ if "VPS_AGENT_CHATGPT_VERIFY_TIMEOUT:-10m" in connect_text and 'if [ ! -t 0 ]' n
     errors.append("scripts/connect-chatgpt.sh: hidden interactive verification timeout returned")
 
 required_flow = {
+    "docs/connect-ai-clients.md": ["ChatGPT", "Claude", "Cursor", "Visual Studio Code", "system.info"],
+    "docs/connect-ai-clients.pt-BR.md": ["ChatGPT", "Claude", "Cursor", "Visual Studio Code", "system.info"],
     "docs/quick-start.md": ["scripts/install.sh", "INSTALLATION COMPLETE"],
     "README.md": ["scripts/install.sh"],
     "README.pt-BR.md": ["scripts/install.sh"],
