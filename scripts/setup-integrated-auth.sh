@@ -504,6 +504,10 @@ fi
 # Durable nonsecret journal before POST avoids duplicate operator creation
 # after a crash between ZITADEL HTTP 200 and local state persistence.
 if [ "$NEEDS_OPERATOR" -eq 1 ]; then
+  if [ -L state ]; then
+    echo "BLOCKED: operator journal directory is a symlink." >&2
+    exit 1
+  fi
   mkdir -p state
   chmod 700 state
   OPERATOR_JOURNAL="state/oauth-operator-create.json"
