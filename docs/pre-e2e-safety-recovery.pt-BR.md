@@ -6,9 +6,10 @@ Quando o Broker cria uma subpasta em uma raiz autorizada, seu UID/GID
 deve ser herdado da pasta pai verificada. Uma falha de `fchown` **nunca**
 pode ser apresentada como sucesso.
 
-A rotina `MkdirAll` tenta desfazer somente o diretório vazio e de mesmo
-inode que acabou de criar. Se ele estiver ocupado, tiver sido trocado ou
-não puder ser removido sem risco, a operação retorna um erro contendo:
+A rotina `MkdirAll` **não tenta apagar automaticamente o diretório
+recém-criado** em caso de falha de `fchown`: checar inode e depois remover
+por nome permitiria uma corrida de substituição entre verificação e exclusão.
+Mesmo quando o diretório estiver vazio, o Broker retorna erro contendo:
 
 - o caminho físico do diretório criado;
 - a indicação `MANUAL RECOVERY required`;
@@ -22,8 +23,10 @@ dados de terceiros. Qualquer correção deve ser feita por operador humano,
 na raiz explicitamente autorizada e após backup quando houver dados.
 
 A suíte privilegiada `TestMkdirAllChownFailure*` testa falha induzida,
-desfazimento de pasta vazia, aviso de resíduo ocupado, nova tentativa
-controlada e preservação de caminhos fora de escopo.
+retenção de pasta vazia ou ocupada para revisão humana, troca adversarial
+de diretório por outro processo sem exclusão de qualquer um deles,
+nova tentativa após limpeza supervisionada e preservação de caminhos
+fora de escopo.
 
 ## Leitura do arquivo .env (Issue #187)
 
@@ -39,6 +42,15 @@ são recusados como inválidos sem imprimir credenciais. O Compose continua
 lendo seu `.env` em separado. Se valores especiais do ambiente real
 não satisfizerem o formato seguro, a operação deve **parar**; não
 desabilitar essa verificação para acelerar o E2E.
+
+## Prévia de mountpoints
+
+O comando `bash scripts/remove.sh --purge --dry-run` apresenta os
+mountpoints encontrados em `state/` e `backups/`, inclusive bind mounts
+aninhados. Se houver montagem sob esses caminhos, a prévia imprime
+`BLOCKED / FOREIGN-REVIEW` com o caminho e termina com código de erro,
+sem remover nada. Falha de `findmnt` também interrompe a prévia.
+Não desmontar automaticamente recursos compartilhados.
 
 ## Gate operacional
 
