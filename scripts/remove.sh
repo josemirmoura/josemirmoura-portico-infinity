@@ -9,31 +9,35 @@ vps_agent_banner
 
 mode="safe"
 remove_source=0
+dry_run=0
 for arg in "$@"; do
   case "$arg" in
     safe) mode="safe" ;;
     --purge) mode="--purge" ;;
     --remove-source) remove_source=1 ;;
+    --dry-run) dry_run=1 ;;
     -h|--help)
       if vps_agent_is_pt_br; then
         cat <<'EOF'
-uso: bash scripts/remove.sh [safe|--purge] [--remove-source]
+uso: bash scripts/remove.sh [safe|--purge] [--remove-source] [--dry-run]
 
 safe             Para o Portico MCP e gira credenciais locais, preservando
                  configuração, policy, auditoria e identidade integrada.
 --purge          Remove runtime, volumes, estado/configuração local,
                  imagens locais padrão e estruturas legadas vazias.
+--dry-run        Exibe os recursos identificados sem alterar nada.
 --remove-source  Apenas com --purge: remove também este checkout Git após
                  uma segunda confirmação explícita.
 EOF
       else
         cat <<'EOF'
-usage: bash scripts/remove.sh [safe|--purge] [--remove-source]
+usage: bash scripts/remove.sh [safe|--purge] [--remove-source] [--dry-run]
 
 safe             Stop Portico MCP and rotate local credentials while preserving
                  configuration, policy, audit state and integrated identity.
 --purge          Delete MCP-owned runtime, volumes, local state/configuration,
                  default local package images and empty legacy scaffolding.
+--dry-run        Show discovered resources without modifying them.
 --remove-source  With --purge only: also delete this Git checkout after a
                  separate explicit confirmation.
 EOF
@@ -41,7 +45,7 @@ EOF
       exit 0
       ;;
     *)
-      echo "$(vps_agent_text "usage: $0 [safe|--purge] [--remove-source]" "uso: $0 [safe|--purge] [--remove-source]")" >&2
+      echo "$(vps_agent_text "usage: $0 [safe|--purge] [--remove-source] [--dry-run]" "uso: $0 [safe|--purge] [--remove-source] [--dry-run]")" >&2
       exit 2
       ;;
   esac
@@ -91,7 +95,7 @@ fi
 # An empty container list cannot prove absence of installation resources.
 # Purge also deletes fixed-name volumes, Compose networks and image tags.
 # Without a container proving checkout ownership, refuse orphaned resources.
-if [ -z "$owned_project_ids" ] && [ "$mode" = "--purge" ]; then
+if [ -z "$owned_project_ids" ] && [ "$mode" = "--purge" ] && [ "$dry_run" -eq 0 ]; then
   orphan_volumes="$(docker volume ls --format '{{.Name}}')" || {
     echo "REMOVE BLOCKED: cannot inspect Docker volumes for orphan ownership." >&2
     exit 1
@@ -207,7 +211,7 @@ if [ ! -f .env ] && [ -z "$project_ids" ]; then
   exit 0
 fi
 
-compose=(docker compose -f compose.yaml)
+compose=(docker compose --profile operator-portal -f compose.yaml)
 if [ "${VPS_AGENT_WHOLE_HOST:-0}" = "1" ]; then
   compose+=(-f compose.host.yaml)
 fi
