@@ -551,7 +551,7 @@ jobs:
           printf 'disposable scoped-state sentinel\n' > "$lab/migrate/state/sentinel"
           printf 'version: 1\nmode: scoped\n' > "$lab/migrate/config/policy.yaml"
           python3 - "$lab/migrate/.env" <<'PY'
-          import json,pathlib,sys
+          import json,pathlib,secrets,sys
           app=json.load(open("/tmp/introspection-app.json",encoding="utf-8"))
           cfg={
               "VPS_AGENT_AUTH_MODE":"integrated",
@@ -567,6 +567,7 @@ jobs:
               "VPS_AGENT_BUNDLED_PROXY":"0",
               "VPS_AGENT_PUBLIC_URL":"https://mcp.example.invalid/mcp",
               "ZITADEL_MASTERKEY":"00000000000000000000000000000000",
+              "ZITADEL_SESSION_COOKIE_SECRET":secrets.token_hex(32),
               "ZITADEL_POSTGRES_PASSWORD":"disposable-not-started",
               "ZITADEL_BOOTSTRAP_ADMIN_PASSWORD":"disposable-not-started",
               "ZITADEL_BOOTSTRAP_PAT_EXPIRATION":"2099-01-01T00:00:00Z",
