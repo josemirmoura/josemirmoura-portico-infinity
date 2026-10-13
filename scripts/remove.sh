@@ -10,6 +10,12 @@ vps_agent_banner
 mode="safe"
 remove_source=0
 dry_run=0
+# Confirmation tokens are supplied by the invoking process, never by .env.
+# Capture these BEFORE .env is sourced so installation configuration cannot
+# silently waive either of the independent destructive confirmations.
+caller_purge_confirmation="${VPS_AGENT_PURGE_CONFIRM:-}"
+caller_source_confirmation="${VPS_AGENT_REMOVE_SOURCE_CONFIRM:-}"
+readonly caller_purge_confirmation caller_source_confirmation
 for arg in "$@"; do
   case "$arg" in
     safe) mode="safe" ;;
@@ -263,7 +269,7 @@ if [ "${COMPOSE_PROJECT_NAME:-mcp-vps-agent}" != "mcp-vps-agent" ]; then
 fi
 
 
-if [ "$mode" = "--purge" ] && [ "${VPS_AGENT_PURGE_CONFIRM:-}" != "PURGE" ]; then
+if [ "$mode" = "--purge" ] && [ "$caller_purge_confirmation" != "PURGE" ]; then
   if [ ! -t 0 ]; then
     echo "$(vps_agent_text 'Full purge requires VPS_AGENT_PURGE_CONFIRM=PURGE in non-interactive mode.' 'O purge completo requer VPS_AGENT_PURGE_CONFIRM=PURGE em modo não interativo.')" >&2
     exit 1
@@ -276,7 +282,7 @@ if [ "$mode" = "--purge" ] && [ "${VPS_AGENT_PURGE_CONFIRM:-}" != "PURGE" ]; the
   fi
 fi
 
-if [ "$remove_source" -eq 1 ] && [ "${VPS_AGENT_REMOVE_SOURCE_CONFIRM:-}" != "REMOVE_SOURCE" ]; then
+if [ "$remove_source" -eq 1 ] && [ "$caller_source_confirmation" != "REMOVE_SOURCE" ]; then
   if [ ! -t 0 ]; then
     echo "$(vps_agent_text 'Source deletion requires VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE in non-interactive mode.' 'A remoção do código requer VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE em modo não interativo.')" >&2
     exit 1
@@ -313,6 +319,13 @@ project_ids="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-a
   echo "REMOVE BLOCKED: cannot re-inventory project containers before mutation." >&2
   exit 1
 }
+# Safe mode preserves the grant database. With no running project containers,
+# the Broker cannot attest revocation; a configuration or persisted state
+# may be reactivated by a later installation. STOP before any mutation.
+if [ "$mode" = "safe" ] && [ -z "$project_ids" ] && { [ -f .env ] || [ -e state ] || [ -L state ]; }; then
+  echo "REMOVE BLOCKED: Broker unavailable; cannot confirm temporary grant revocation while configuration or state persists. Restore Broker for supervised revoke-all or inspect state with operator." >&2
+  exit 1
+fi
 if [ "$mode" = "safe" ] && [ -n "$project_ids" ] && [ ! -f .env ]; then
   echo "REMOVE BLOCKED: running project containers without .env; cannot confirm temporary grant revocation in safe mode." >&2
   exit 1
