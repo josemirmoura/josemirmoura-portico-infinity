@@ -95,6 +95,10 @@ exit 0
         self.assertIn("REMOVAL PREVIEW", result.stdout)
         self.assertFalse(sentinel.exists(), "preview must not evaluate shell code from .env")
     def test_env_cannot_change_compose_project_name(self):
+        # The fixture normally simulates an orphaned private network, which
+        # safely blocks purge earlier. Remove that synthetic obstacle so this
+        # test reaches the second guard after reading .env.
+        (self.dir / "network-removed").touch()
         (self.dir / ".env").write_text("COMPOSE_PROJECT_NAME=foreign-project\n")
         env = self.env | {"VPS_AGENT_PURGE_CONFIRM": "PURGE"}
         result = subprocess.run(
