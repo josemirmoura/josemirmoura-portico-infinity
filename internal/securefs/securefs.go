@@ -12,16 +12,69 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 )
 
 const DefaultMaxBytes int64 = 8 << 20
 const MaxCopyBytes int64 = 512 << 20
+
+type rootIdentity struct {
+	device uint64
+	inode  uint64
+}
+
+type pinnedRoot struct {
+	anchor   string
+	anchorID rootIdentity
+	rootID   rootIdentity
+	ready    bool
+}
 
 type Manager struct {
 	readRoots  []string
 	writeRoots []string
 	maxBytes   int64
 	hostRoot   string
+	mu         sync.RWMutex
+	pins       map[string]pinnedRoot
+}
+
+// fileIdentity identifies an inode, never a model-supplied path or owner.
+func fileIdentity(info os.FileInfo) (rootIdentity, error) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return rootIdentity{}, errors.New("cannot verify authorized root inode")
+	}
+	return rootIdentity{device: uint64(st.Dev), inode: uint64(st.Ino)}, nil
+}
+
+func sameIdentity(info os.FileInfo, expected rootIdentity) bool {
+	id, err := fileIdentity(info)
+	return err == nil && id == expected
+}
+
+// openVerifiedRoot may open a substituted symlink, but never performs an
+// operation through it: the opened directory FD must match the root inode
+// pinned when its grant was constructed (or by MkdirAll). In-flight renames
+// cannot alter the directory referenced by an already verified FD.
+func (m *Manager) openVerifiedRoot(path string) (*os.Root, error) {
+	m.mu.RLock()
+	pin, ok := m.pins[path]
+	m.mu.RUnlock()
+	if !ok || !pin.ready {
+		return nil, errors.New("authorized root is not initialized")
+	}
+	root, err := os.OpenRoot(m.physical(path))
+	if err != nil {
+		return nil, err
+	}
+	info, err := root.Stat(".")
+	if err != nil || !sameIdentity(info, pin.rootID) {
+		_ = root.Close()
+		return nil, errors.New("authorized root identity changed")
+	}
+	return root, nil
 }
 
 func New(readRoots, writeRoots []string, maxBytes int64) (*Manager, error) {
@@ -60,16 +113,32 @@ func NewWithHostRoot(readRoots, writeRoots []string, maxBytes int64, hostRoot st
 			hostRoot = ""
 		}
 	}
-	m := &Manager{readRoots: rr, writeRoots: wr, maxBytes: maxBytes, hostRoot: hostRoot}
+	m := &Manager{readRoots: rr, writeRoots: wr, maxBytes: maxBytes, hostRoot: hostRoot, pins: make(map[string]pinnedRoot)}
 	seen := make(map[string]struct{}, len(rr)+len(wr))
 	for _, configuredRoot := range append(append([]string(nil), rr...), wr...) {
 		if _, ok := seen[configuredRoot]; ok {
 			continue
 		}
 		seen[configuredRoot] = struct{}{}
-		if _, err := nearestExistingDir(m.physical(configuredRoot)); err != nil {
+		physical := m.physical(configuredRoot)
+		anchor, err := nearestExistingDir(physical)
+		if err != nil {
 			return nil, fmt.Errorf("unsafe authorized root %q: %w", configuredRoot, err)
 		}
+		info, err := os.Lstat(anchor)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("unsafe authorized anchor %q: %v", anchor, err)
+		}
+		id, err := fileIdentity(info)
+		if err != nil {
+			return nil, err
+		}
+		pin := pinnedRoot{anchor: anchor, anchorID: id}
+		if anchor == physical {
+			pin.rootID = id
+			pin.ready = true
+		}
+		m.pins[configuredRoot] = pin
 	}
 	return m, nil
 }
@@ -191,10 +260,13 @@ func (m *Manager) MkdirAll(dirname string, perm os.FileMode) error {
 
 	physicalAllowedRoot := m.physical(allowedRoot)
 	physicalTarget := m.physical(target)
-	anchor, err := nearestExistingDir(physicalAllowedRoot)
-	if err != nil {
-		return err
+	m.mu.RLock()
+	pin, ok := m.pins[allowedRoot]
+	m.mu.RUnlock()
+	if !ok {
+		return errors.New("authorized directory anchor not registered")
 	}
+	anchor := pin.anchor
 	rel, err := filepath.Rel(anchor, physicalTarget)
 	if err != nil {
 		return err
@@ -208,6 +280,10 @@ func (m *Manager) MkdirAll(dirname string, perm os.FileMode) error {
 		return err
 	}
 	defer root.Close()
+	anchorInfo, err := root.Stat(".")
+	if err != nil || !sameIdentity(anchorInfo, pin.anchorID) {
+		return errors.New("authorized directory anchor identity changed")
+	}
 
 	current := "."
 	for _, part := range strings.FieldsFunc(filepath.ToSlash(rel), func(r rune) bool { return r == '/' }) {
@@ -235,9 +311,73 @@ func (m *Manager) MkdirAll(dirname string, perm os.FileMode) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		// Use only the parent already confined by the pinned root FD.
+		// No model-controlled UID/GID is accepted for a new directory.
+		parent := filepath.Dir(current)
+		parentInfo, err := root.Stat(parent)
+		if err != nil || !parentInfo.IsDir() {
+			return errors.New("cannot verify directory parent ownership")
+		}
+		parentStat, ok := parentInfo.Sys().(*syscall.Stat_t)
+		if !ok {
+			return errors.New("cannot verify directory parent UID/GID")
+		}
 		if err := root.Mkdir(current, perm.Perm()); err != nil {
 			return err
 		}
+		createdInfo, err := root.Lstat(current)
+		if err != nil || !createdInfo.IsDir() || createdInfo.Mode()&os.ModeSymlink != 0 {
+			return errors.New("created directory changed before ownership assignment")
+		}
+		createdID, err := fileIdentity(createdInfo)
+		if err != nil {
+			return err
+		}
+		dirFD, err := root.Open(current)
+		if err != nil {
+			return err
+		}
+		openedInfo, err := dirFD.Stat()
+		if err != nil || !sameIdentity(openedInfo, createdID) {
+			_ = dirFD.Close()
+			return errors.New("created directory inode changed before ownership assignment")
+		}
+		// If assigning the verified owner fails, fail closed instead of
+		// reporting a successful directory with inaccessible root ownership.
+		if err := dirFD.Chown(int(parentStat.Uid), int(parentStat.Gid)); err != nil {
+			_ = dirFD.Close()
+			return err
+		}
+		if err := dirFD.Close(); err != nil {
+			return err
+		}
+	}
+	// The configured root may have been absent at construction. Pin the newly
+	// created root only via the already verified ancestor FD, never by opening
+	// the configured path text again.
+	if !pin.ready {
+		rootRel, err := filepath.Rel(anchor, physicalAllowedRoot)
+		if err != nil {
+			return err
+		}
+		info, err := root.Lstat(rootRel)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("newly created authorized root is not a directory")
+		}
+		fd, err := root.OpenRoot(rootRel)
+		if err != nil {
+			return err
+		}
+		opened, err := fd.Stat(".")
+		_ = fd.Close()
+		id, idErr := fileIdentity(info)
+		if err != nil || idErr != nil || !sameIdentity(opened, id) {
+			return errors.New("newly created root inode changed before verification")
+		}
+		m.mu.Lock()
+		pin.rootID, pin.ready = id, true
+		m.pins[allowedRoot] = pin
+		m.mu.Unlock()
 	}
 	return nil
 }
@@ -271,7 +411,7 @@ func (m *Manager) Stat(filename string, write bool) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := m.openVerifiedRoot(rootPath)
 	if err != nil {
 		return Entry{}, err
 	}
@@ -294,7 +434,7 @@ func (m *Manager) List(dirname string, limit int) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := m.openVerifiedRoot(rootPath)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +465,7 @@ func (m *Manager) Hash(filename string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := m.openVerifiedRoot(rootPath)
 	if err != nil {
 		return "", err
 	}
@@ -386,7 +526,7 @@ func (m *Manager) CopyFile(src, dst string) error {
 	if dstRel == "." {
 		return errors.New("destination cannot be an authorized root directory")
 	}
-	srcRoot, err := os.OpenRoot(m.physical(srcRootPath))
+	srcRoot, err := m.openVerifiedRoot(srcRootPath)
 	if err != nil {
 		return err
 	}
@@ -407,12 +547,16 @@ func (m *Manager) CopyFile(src, dst string) error {
 		return fmt.Errorf("file exceeds copy limit of %d bytes", MaxCopyBytes)
 	}
 
-	dstRoot, err := os.OpenRoot(m.physical(dstRootPath))
+	dstRoot, err := m.openVerifiedRoot(dstRootPath)
 	if err != nil {
 		return err
 	}
 	defer dstRoot.Close()
 	dir := filepath.Dir(dstRel)
+	uid, gid, err := atomicWriteOwner(dstRoot, dir, dstRel)
+	if err != nil {
+		return err
+	}
 	base := filepath.Base(dstRel)
 	var nonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -434,6 +578,11 @@ func (m *Manager) CopyFile(src, dst string) error {
 		}
 	}()
 	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	// Existing destination retains its owner; a new copy inherits the
+	// verified destination directory UID/GID, never the Broker root UID.
+	if err := out.Chown(uid, gid); err != nil {
 		return err
 	}
 	if err := out.Sync(); err != nil {
@@ -462,7 +611,7 @@ func (m *Manager) Move(src, dst string) error {
 		return errors.New("cannot move an authorized root directory")
 	}
 	if srcRootPath == dstRootPath {
-		root, err := os.OpenRoot(m.physical(srcRootPath))
+		root, err := m.openVerifiedRoot(srcRootPath)
 		if err != nil {
 			return err
 		}
@@ -508,7 +657,7 @@ func (m *Manager) Remove(target string, recursive bool) error {
 	if rel == "." {
 		return errors.New("refusing to delete an authorized root itself")
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := m.openVerifiedRoot(rootPath)
 	if err != nil {
 		return err
 	}
@@ -534,7 +683,7 @@ func (m *Manager) Chmod(target string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := m.openVerifiedRoot(rootPath)
 	if err != nil {
 		return err
 	}
@@ -555,7 +704,7 @@ func (m *Manager) Chown(target string, uid, gid int) error {
 	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := m.openVerifiedRoot(rootPath)
 	if err != nil {
 		return err
 	}
@@ -573,7 +722,7 @@ func (m *Manager) ReadFile(filename string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := m.openVerifiedRoot(rootPath)
 	if err != nil {
 		return nil, err
 	}
@@ -596,6 +745,33 @@ func (m *Manager) ReadFile(filename string) ([]byte, error) {
 	return data, nil
 }
 
+// atomicWriteOwner chooses the effective host owner for a new atomic file.
+// Existing files keep their original UID/GID. For new files, only the
+// directory owner is used. Ownership is never supplied by the model or by
+// any MCP argument. All metadata lookups remain under os.Root confinement.
+func atomicWriteOwner(root *os.Root, dir, rel string) (int, int, error) {
+	info, err := root.Lstat(rel)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return 0, 0, err
+		}
+		info, err = root.Stat(dir)
+		if err != nil {
+			return 0, 0, err
+		}
+		if !info.IsDir() {
+			return 0, 0, errors.New("atomic write parent must be a directory")
+		}
+	} else if !info.Mode().IsRegular() {
+		return 0, 0, errors.New("atomic write target must be a regular file")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, errors.New("cannot verify host UID/GID for atomic write")
+	}
+	return int(stat.Uid), int(stat.Gid), nil
+}
+
 func (m *Manager) WriteFileAtomic(filename string, data []byte) error {
 	if int64(len(data)) > m.maxBytes {
 		return fmt.Errorf("content exceeds %d-byte limit", m.maxBytes)
@@ -607,13 +783,17 @@ func (m *Manager) WriteFileAtomic(filename string, data []byte) error {
 	if rel == "." {
 		return errors.New("cannot overwrite root directory")
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := m.openVerifiedRoot(rootPath)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
 
 	dir := filepath.Dir(rel)
+	uid, gid, err := atomicWriteOwner(root, dir, rel)
+	if err != nil {
+		return err
+	}
 	base := filepath.Base(rel)
 	var nonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -638,6 +818,11 @@ func (m *Manager) WriteFileAtomic(filename string, data []byte) error {
 	}()
 
 	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	// Chown the exclusive temporary inode before atomic rename. If the Broker
+	// cannot set the verified host owner, fail closed without replacing target.
+	if err := f.Chown(uid, gid); err != nil {
 		return err
 	}
 	if err := f.Sync(); err != nil {

@@ -68,6 +68,37 @@ func TestMCPGate0RoundTrip(t *testing.T) {
 	}
 }
 
+// Contract at the MCP protocol boundary: denied filesystem access is a
+// tools/call tool-level failure, not JSON-RPC/HTTP invalid-arguments.
+func TestFilesystemDenialsStayToolLevelOverStreamableHTTP(t *testing.T) {
+	root := t.TempDir()
+	fs, err := securefs.New([]string{root}, []string{root}, 1024)
+	if err != nil { t.Fatal(err) }
+	ts := httptest.NewServer(Handler(LocalExecutor{FS: fs}, AuthConfig{Mode: "none", StaticSubject: "test-user"}))
+	defer ts.Close()
+	client := mcp.NewClient(&mcp.Implementation{Name:"denial-envelope",Version:"v1"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint:ts.URL+"/mcp"}, nil)
+	if err != nil { t.Fatal(err) }
+	defer session.Close()
+	for _, tc := range []struct{name string; args map[string]any}{
+		{"file.read_test", map[string]any{"path": "/etc/passwd"}},
+		{"file.write_test", map[string]any{"path": "/etc/portico-denied-test.txt", "content":"synthetic"}},
+	} {
+		t.Run(tc.name, func(t *testing.T){
+			res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name:tc.name,Arguments:tc.args})
+			if err != nil {t.Fatalf("expected tool error, not transport or RPC error: %v",err)}
+			if res == nil || !res.IsError {t.Fatalf("denial not marked IsError: %+v",res)}
+			payload, _ := json.Marshal(res.Content)
+			if !strings.Contains(string(payload),"permission_denied") {
+				t.Fatalf("Broker permission_denied code missing: %s",payload)
+			}
+			if strings.Contains(string(payload),"INVALID_ARGUMENT") {
+				t.Fatalf("Gateway must not relabel permission failure as INVALID_ARGUMENT: %s",payload)
+			}
+		})
+	}
+}
+
 func TestStaticAuth(t *testing.T) {
 	root := t.TempDir()
 	fs, _ := securefs.New([]string{root}, []string{root}, 1024)

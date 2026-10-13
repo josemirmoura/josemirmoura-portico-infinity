@@ -21,7 +21,8 @@ class OperatorCurlOutputTests(unittest.TestCase):
     def setUpClass(cls):
         cls.source = SETUP.read_text(encoding="utf-8")
         start = cls.source.index('  HTTP_CODE="$(')
-        end = cls.source.index("\n  CURL_STATUS=$?", start)
+        status = cls.source.index("CURL_STATUS=$?", start)
+        end = cls.source.rfind("\n", start, status)
         cls.operator_post = cls.source[start:end]
 
     def test_shell_parses(self):

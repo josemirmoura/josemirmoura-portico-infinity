@@ -5,6 +5,8 @@ cd "$(dirname "$0")/.."
 
 # shellcheck source=scripts/lib/product.sh
 source scripts/lib/product.sh
+# shellcheck source=scripts/lib/masked-password.sh
+source scripts/lib/masked-password.sh
 vps_agent_init_language ""
 
 usage() {
@@ -355,6 +357,13 @@ BOOTSTRAP_ADMIN_PASSWORD="$(env_value ZITADEL_BOOTSTRAP_ADMIN_PASSWORD || true)"
 [ -n "$MASTERKEY" ] || MASTERKEY="$(openssl rand -hex 16)"
 [ -n "$POSTGRES_PASSWORD" ] || POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 [ -n "$BOOTSTRAP_ADMIN_PASSWORD" ] || BOOTSTRAP_ADMIN_PASSWORD="T1!$(openssl rand -hex 18)"
+# Dedicated Login V2 cookie signing key: reuse after an interrupted bootstrap or upgrade.
+SESSION_COOKIE_SECRET="$(env_value ZITADEL_SESSION_COOKIE_SECRET || true)"
+[ -n "$SESSION_COOKIE_SECRET" ] || SESSION_COOKIE_SECRET="$(openssl rand -hex 32)"
+if [ "${#SESSION_COOKIE_SECRET}" -lt 32 ]; then
+  echo "$(vps_agent_text 'ERROR: ZITADEL_SESSION_COOKIE_SECRET must be at least 32 characters.' 'ERRO: ZITADEL_SESSION_COOKIE_SECRET deve ter pelo menos 32 caracteres.')" >&2
+  exit 1
+fi
 
 upsert_env VPS_AGENT_DOMAIN "$DOMAIN"
 upsert_env VPS_AGENT_PUBLIC_URL "https://$DOMAIN/mcp"
@@ -365,7 +374,8 @@ upsert_env VPS_AGENT_RESOURCE_METADATA_URL "https://$DOMAIN/.well-known/oauth-pr
 upsert_env VPS_AGENT_EDGE_NETWORK "$EDGE_NETWORK"
 upsert_env VPS_AGENT_TRAEFIK_CERTRESOLVER "$CERTRESOLVER"
 upsert_env VPS_AGENT_BUNDLED_PROXY "$BUNDLED_PROXY"
-upsert_env ZITADEL_VERSION v4.19.1
+upsert_env ZITADEL_VERSION v4.19.4
+upsert_env ZITADEL_SESSION_COOKIE_SECRET "$SESSION_COOKIE_SECRET"
 upsert_env ZITADEL_MASTERKEY "$MASTERKEY"
 upsert_env ZITADEL_POSTGRES_DB zitadel
 upsert_env ZITADEL_POSTGRES_USER zitadel
@@ -500,41 +510,69 @@ if [ "$NEEDS_BOOTSTRAP" -eq 1 ]; then
   fi
 fi
 
+# BEGIN RESUMABLE OPERATOR CREATION
+# Durable nonsecret journal before POST avoids duplicate operator creation
+# after a crash between ZITADEL HTTP 200 and local state persistence.
 if [ "$NEEDS_OPERATOR" -eq 1 ]; then
-  PASSWORD="${VPS_AGENT_OPERATOR_PASSWORD:-}"
-  if [ -z "$PASSWORD" ]; then
-    if [ ! -t 0 ]; then
-      echo "$(vps_agent_text 'ERROR: set VPS_AGENT_OPERATOR_PASSWORD for non-interactive bootstrap.' 'ERRO: defina VPS_AGENT_OPERATOR_PASSWORD para o bootstrap não interativo.')" >&2
-      exit 1
-    fi
-    while :; do
-      printf '%s' "$(vps_agent_text 'Create operator password (12+ characters): ' 'Crie a senha do operador (12+ caracteres): ')" >&2
-      read -r -s PASSWORD
-      echo >&2
-      printf '%s' "$(vps_agent_text 'Repeat operator password: ' 'Repita a senha do operador: ')" >&2
-      read -r -s PASSWORD2
-      echo >&2
-      if [ "$PASSWORD" != "$PASSWORD2" ]; then
-        echo "$(vps_agent_text 'Passwords do not match.' 'As senhas não coincidem.')" >&2
-        continue
-      fi
-      if [ "${#PASSWORD}" -lt 12 ]; then
-        echo "$(vps_agent_text 'Use at least 12 characters.' 'Use pelo menos 12 caracteres.')" >&2
-        continue
-      fi
-      break
-    done
-  elif [ "${#PASSWORD}" -lt 12 ]; then
-    echo "$(vps_agent_text 'ERROR: VPS_AGENT_OPERATOR_PASSWORD must contain at least 12 characters.' 'ERRO: VPS_AGENT_OPERATOR_PASSWORD deve conter pelo menos 12 caracteres.')" >&2
+  if [ -L state ]; then
+    echo "BLOCKED: operator journal directory is a symlink." >&2
     exit 1
   fi
+  mkdir -p state
+  chmod 700 state
+  OPERATOR_JOURNAL="state/oauth-operator-create.json"
+  OPERATOR_ID="$(python3 scripts/oauth-operator-reconcile.py prepare "$OPERATOR_JOURNAL" "$DOMAIN" "$OPERATOR_USERNAME" "$OPERATOR_EMAIL")"
 
-  OPERATOR_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-  REQUEST_FILE="$(mktemp "$VPS_AGENT_SETUP_TMP/operator-request.XXXXXXXX")"
-  chmod 600 "$REQUEST_FILE"
+  # A GET by the previously planned user ID is required before EVERY POST.
+  # Ambiguous answers, authentication failures and network errors fail closed.
+  probe_operator_identity() {
+    local identity_probe
+    identity_probe="$(mktemp "$VPS_AGENT_SETUP_TMP/operator-probe.XXXXXXXX")"
+    chmod 600 "$identity_probe"
+    if ! curl_zitadel_internal \
+      --request GET \
+      --url "http://127.0.0.1:8080/v2/users/$OPERATOR_ID" \
+      --header "Authorization: Bearer $BOOTSTRAP_PAT" \
+      --write-out '\n__PORTICO_HTTP_STATUS__%{http_code}' \
+      >"$identity_probe"; then
+      echo "$(vps_agent_text 'BLOCKED: operator lookup failed; no creation was attempted.' 'BLOQUEADO: falha na consulta do operador; nenhuma nova identidade foi criada.')" >&2
+      return 1
+    fi
+    python3 scripts/oauth-operator-reconcile.py probe "$identity_probe" "$OPERATOR_ID" "$OPERATOR_USERNAME" "$OPERATOR_EMAIL"
+  }
 
-  # Password travels on a private inherited file descriptor, never argv.
-  python3 - "$REQUEST_FILE" "$OPERATOR_ID" "$OPERATOR_USERNAME" "$OPERATOR_EMAIL" "$VPS_AGENT_LANG" 3<<<"$PASSWORD" <<'PY'
+  PROBE_STATE="$(probe_operator_identity)"
+  if [ "$PROBE_STATE" = "FOUND" ]; then
+    echo "$(vps_agent_text 'Existing operator recovered from verified ZITADEL identity; no second POST.' 'Operador recuperado após verificação da identidade no ZITADEL; nenhum segundo POST.')"
+  elif [ "$PROBE_STATE" = "ABSENT" ]; then
+    PASSWORD="${VPS_AGENT_OPERATOR_PASSWORD:-}"
+    if [ -z "$PASSWORD" ]; then
+      if [ ! -t 0 ]; then
+        echo "$(vps_agent_text 'ERROR: set VPS_AGENT_OPERATOR_PASSWORD for non-interactive bootstrap.' 'ERRO: defina VPS_AGENT_OPERATOR_PASSWORD para o bootstrap não interativo.')" >&2
+        exit 1
+      fi
+      while :; do
+        vps_agent_read_masked_password PASSWORD "$(vps_agent_text 'Create operator password (12+ characters): ' 'Crie a senha do operador (12+ caracteres): ')"
+        vps_agent_read_masked_password PASSWORD2 "$(vps_agent_text 'Repeat operator password: ' 'Repita a senha do operador: ')"
+        if [ "$PASSWORD" != "$PASSWORD2" ]; then
+          echo "$(vps_agent_text 'Passwords do not match.' 'As senhas não coincidem.')" >&2
+          continue
+        fi
+        if [ "${#PASSWORD}" -lt 12 ]; then
+          echo "$(vps_agent_text 'Use at least 12 characters.' 'Use pelo menos 12 caracteres.')" >&2
+          continue
+        fi
+        break
+      done
+    elif [ "${#PASSWORD}" -lt 12 ]; then
+      echo "$(vps_agent_text 'ERROR: VPS_AGENT_OPERATOR_PASSWORD must contain at least 12 characters.' 'ERRO: VPS_AGENT_OPERATOR_PASSWORD deve conter pelo menos 12 caracteres.')" >&2
+      exit 1
+    fi
+
+    REQUEST_FILE="$(mktemp "$VPS_AGENT_SETUP_TMP/operator-request.XXXXXXXX")"
+    chmod 600 "$REQUEST_FILE"
+    # Password is inherited through a private FD, never process arguments.
+    python3 - "$REQUEST_FILE" "$OPERATOR_ID" "$OPERATOR_USERNAME" "$OPERATOR_EMAIL" "$VPS_AGENT_LANG" 3<<<"$PASSWORD" <<'PY'
 import json,os,sys
 path,user_id,username,email,lang=sys.argv[1:]
 password=os.fdopen(3).read()
@@ -552,17 +590,16 @@ payload={
   "email": {"email": email, "isVerified": True},
   "password": {"password": password, "changeRequired": False}
 }
-with open(path,"w") as f:
-    json.dump(payload,f)
+with open(path,"w") as file:
+    json.dump(payload,file)
 PY
-  unset PASSWORD PASSWORD2 2>/dev/null || true
+    unset PASSWORD PASSWORD2 2>/dev/null || true
 
-  echo "$(vps_agent_text 'Creating the dedicated non-admin Portico operator identity...' 'Criando a identidade dedicada e não administrativa do operador Portico...')"
-  # The curl process runs in an ephemeral container: host-only temporary
-  # paths are invisible there, so discard the unused POST body inside it.
-  set +e
-  HTTP_CODE="$(
-    curl_zitadel_internal \
+    echo "$(vps_agent_text 'Creating the dedicated non-admin Portico operator identity...' 'Criando a identidade dedicada e não administrativa do operador Portico...')"
+    # The ephemeral curl container cannot write to a host-only temp path.
+    # Journal survives every ambiguous POST outcome until verified by GET.
+    set +e
+    HTTP_CODE="$(curl_zitadel_internal \
       --output /dev/null \
       --write-out '%{http_code}' \
       --request POST \
@@ -570,39 +607,54 @@ PY
       --header "Authorization: Bearer $BOOTSTRAP_PAT" \
       --header 'Content-Type: application/json' \
       --data-binary @- \
-      < "$REQUEST_FILE"
-  )"
-  CURL_STATUS=$?
-  set -e
-  rm -f "$REQUEST_FILE"
-
-  if [ "$CURL_STATUS" -ne 0 ] || { [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; }; then
-    echo "$(vps_agent_text "ERROR: operator creation failed (curl=$CURL_STATUS HTTP=${HTTP_CODE:-none})." "ERRO: falha ao criar o operador (curl=$CURL_STATUS HTTP=${HTTP_CODE:-nenhum}).")" >&2
+      < "$REQUEST_FILE")"
+    CURL_STATUS=$?
+    set -e
+    rm -f "$REQUEST_FILE"
+    if [ "$CURL_STATUS" -ne 0 ] || { [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; }; then
+      echo "$(vps_agent_text "BLOCKED: operator POST uncertain (curl=$CURL_STATUS HTTP=${HTTP_CODE:-none}); journal preserved for a verified retry." "BLOQUEADO: resultado incerto do POST (curl=$CURL_STATUS HTTP=${HTTP_CODE:-nenhum}); journal preservado para retomada verificada.")" >&2
+      exit 1
+    fi
+    PROBE_STATE="$(probe_operator_identity)"
+    if [ "$PROBE_STATE" != "FOUND" ]; then
+      echo "$(vps_agent_text 'BLOCKED: POST succeeded but the planned operator identity was not verified; journal preserved.' 'BLOQUEADO: POST concluído mas identidade do operador não verificada; journal preservado.')" >&2
+      exit 1
+    fi
+  else
+    echo "BLOCKED: unrecognized operator probe result; no POST attempted." >&2
     exit 1
   fi
 
   upsert_env VPS_AGENT_SUBJECT "$OPERATOR_ID"
   CURRENT_SUBJECT="$OPERATOR_ID"
-  mkdir -p state
-  chmod 700 state
   python3 - "$MARKER" "$DOMAIN" "$OPERATOR_ID" "$OPERATOR_USERNAME" "$OPERATOR_EMAIL" <<'PY'
-import datetime,json,sys
+import datetime,json,os,pathlib,sys,tempfile
 path,domain,subject,username,email=sys.argv[1:]
 payload={
-  "domain":domain,
-  "subject":subject,
-  "username":username,
-  "email":email,
+  "domain":domain, "subject":subject, "username":username, "email":email,
   "bootstrap_complete":False,
   "created_at":datetime.datetime.now(datetime.timezone.utc).isoformat()
 }
-with open(path,"w") as f:
-    json.dump(payload,f,indent=2)
-    f.write("\n")
+target=pathlib.Path(path)
+fd,name=tempfile.mkstemp(prefix=".integrated-auth-",dir=target.parent)
+try:
+    with os.fdopen(fd,"w") as stream:
+        os.fchmod(stream.fileno(),0o600)
+        json.dump(payload,stream,indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(name,target)
+    fd=os.open(target.parent,os.O_RDONLY|os.O_DIRECTORY)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+finally:
+    if os.path.exists(name): os.unlink(name)
 PY
   chmod 600 "$MARKER"
+  python3 scripts/oauth-operator-reconcile.py finalize "$OPERATOR_JOURNAL" "$MARKER" "$OPERATOR_ID"
 fi
-
+# END RESUMABLE OPERATOR CREATION
 if [ "$NEEDS_RESOURCE" -eq 1 ]; then
   if [ -z "$RESOURCE_PROJECT_ID" ]; then
     echo "$(vps_agent_text 'Creating the dedicated OAuth resource/audience project...' 'Criando o projeto OAuth dedicado de recurso/audiência...')"

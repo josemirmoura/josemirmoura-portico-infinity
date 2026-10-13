@@ -109,16 +109,36 @@ vps_agent_author_line() {
 }
 
 vps_agent_banner() {
-  local version tagline author
+  local version locale_name terminal_width
   version="$(vps_agent_version)"
-  tagline="$(vps_agent_tagline)"
-  author="$(vps_agent_author_line)"
+  locale_name="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+  terminal_width="${COLUMNS:-80}"
 
   printf '\n+------------------------------------------------------------+\n'
-  printf '| %-58s |\n' "$VPS_AGENT_PRODUCT_NAME"
-  printf '| %-58s |\n' "$tagline"
-  printf '| %-58s |\n' "$author"
-  printf '| %-58s |\n' "$(vps_agent_text "Version: $version" "Versão: $version")"
+  # The five-line logo uses single-column Unicode blocks. Fall back to an
+  # ASCII header on non-UTF-8 or narrow terminals, or when explicitly asked.
+  if [ "${VPS_AGENT_BANNER_ASCII:-0}" != "1" ] &&
+     [[ "$locale_name" == *[Uu][Tt][Ff]-8* || "$locale_name" == *[Uu][Tt][Ff]8* ]] &&
+     [[ "$terminal_width" =~ ^[0-9]+$ ]] && [ "$terminal_width" -ge 62 ]; then
+    while IFS= read -r line; do
+      # Bash printf field width counts UTF-8 bytes, not terminal columns.
+      # Pad from Bash's character length instead, preserving a 62-cell frame.
+      printf '| %s%*s |\n' "$line" "$((58 - ${#line}))" ''
+    done <<'PORTICO_LOGO'
+  ██████   ██████  ██████  ████████ ██  ██████   ██████
+  ██   ██ ██    ██ ██   ██    ██    ██ ██       ██    ██
+  ██████  ██    ██ ██████     ██    ██ ██       ██    ██
+  ██      ██    ██ ██   ██    ██    ██ ██       ██    ██
+  ██       ██████  ██   ██    ██    ██  ██████   ██████
+PORTICO_LOGO
+  else
+    printf '| %-58s |\n' 'PORTICO MCP'
+  fi
+  printf '| %-58s |\n' ''
+  # Identity lines are intentionally invariant, even in the pt-BR installer.
+  printf '| %-58s |\n' 'Secure MCP Gateway for Linux Hosts'
+  printf '| %-58s |\n' "Made by $VPS_AGENT_AUTHOR_NAME | $VPS_AGENT_AUTHOR_GITHUB"
+  printf '| %-58s |\n' "Version: $version"
   printf '+------------------------------------------------------------+\n\n'
 }
 

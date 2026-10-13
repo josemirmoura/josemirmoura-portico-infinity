@@ -265,7 +265,7 @@ jobs:
             --local-only \
             --yes | tee /tmp/guided-install.txt
           grep -q 'Portico MCP' /tmp/guided-install.txt
-          grep -Fq 'Feito por Josemir Moura | github.com/josemirmoura' /tmp/guided-install.txt
+          grep -Fq 'Made by Josemir Moura | github.com/josemirmoura' /tmp/guided-install.txt
           grep -q 'CHECKPOINT LOCAL CONCLUÍDO' /tmp/guided-install.txt
           grep -q 'A instalação NÃO está concluída' /tmp/guided-install.txt
           grep -q '^VPS_AGENT_SCOPE_ROOT=/opt$' .env
