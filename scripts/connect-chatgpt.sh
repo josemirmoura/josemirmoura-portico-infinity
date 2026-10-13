@@ -55,10 +55,13 @@ BASELINE="$("${wait_tool[@]}" --baseline-only)"
 }
 
 show_tutorial() {
-  local documentation_url
+  local documentation_url documentation_ref
+  # Link to the exact checked-out code, including unmerged RC candidates.
+  # Only use 'main' if the distributor omitted Git metadata.
+  documentation_ref="$(git rev-parse --verify HEAD 2>/dev/null || printf 'main')"
   echo
   if vps_agent_is_pt_br; then
-    documentation_url="https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/main/docs/connect-ai-clients.pt-BR.md"
+    documentation_url="https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/${documentation_ref}/docs/connect-ai-clients.pt-BR.md"
     cat <<EOF
 === Portico MCP | Conectar clientes de IA ===
 
@@ -81,7 +84,7 @@ autenticada e auditada pelo Broker. O registro de um cliente, sozinho,
 não comprova a instalação completa.
 EOF
   else
-    documentation_url="https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/main/docs/connect-ai-clients.md"
+    documentation_url="https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/${documentation_ref}/docs/connect-ai-clients.md"
     cat <<EOF
 === Portico MCP | Connect AI clients ===
 
