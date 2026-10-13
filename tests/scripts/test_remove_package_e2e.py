@@ -84,6 +84,16 @@ exit 0
                 for x in self.commands()), self.commands()
         )
 
+    def test_env_cannot_change_compose_project_name(self):
+        (self.dir / ".env").write_text("COMPOSE_PROJECT_NAME=foreign-project\n")
+        result = subprocess.run(
+            ["bash", "scripts/remove.sh", "--purge", "--dry-run"],
+            cwd=self.dir, env=self.env, capture_output=True, text=True, timeout=15,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("noncanonical Compose project", result.stderr)
+        self.assertFalse(any(x.startswith("rm ") or " down " in x
+                             for x in self.commands()))
     def test_optional_profile_is_included_in_compose_down(self):
         self.assertIn("compose=(docker compose --profile operator-portal -f compose.yaml)",
                       self.script)
