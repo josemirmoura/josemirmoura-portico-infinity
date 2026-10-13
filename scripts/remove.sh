@@ -140,19 +140,6 @@ if [ "$remove_source" -eq 1 ]; then
   source_verified=1
 fi
 
-if [ -f .env ]; then
-  set -a
-  . ./.env
-  set +a
-fi
-
-# The checkout .env may define COMPOSE_PROJECT_NAME: check AGAIN after sourcing.
-# Never allow its values to redirect `docker compose down` to another project.
-if [ "${COMPOSE_PROJECT_NAME:-mcp-vps-agent}" != "mcp-vps-agent" ]; then
-  echo "REMOVE BLOCKED: .env selects a noncanonical Compose project." >&2
-  exit 1
-fi
-
 # BEGIN REMOVAL PREVIEW
 # Read-only inventory; no container, state, volume or credential mutation.
 if [ "$dry_run" -eq 1 ]; then
@@ -176,6 +163,20 @@ if [ "$dry_run" -eq 1 ]; then
   exit 0
 fi
 # END REMOVAL PREVIEW
+
+if [ -f .env ]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
+# The checkout .env may define COMPOSE_PROJECT_NAME: check AGAIN after sourcing.
+# Never allow its values to redirect `docker compose down` to another project.
+if [ "${COMPOSE_PROJECT_NAME:-mcp-vps-agent}" != "mcp-vps-agent" ]; then
+  echo "REMOVE BLOCKED: .env selects a noncanonical Compose project." >&2
+  exit 1
+fi
+
 
 if [ "$mode" = "--purge" ] && [ "${VPS_AGENT_PURGE_CONFIRM:-}" != "PURGE" ]; then
   if [ ! -t 0 ]; then
