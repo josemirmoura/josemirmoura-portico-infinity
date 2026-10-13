@@ -187,7 +187,38 @@ if [ "$dry_run" -eq 1 ]; then
       printf '  %s\n' "$target"
     fi
   done
+  # Show mountpoints within state/backups *before* the operator authorizes a
+  # purge. These paths may contain unrelated bind-mounted data. A preview is
+  # read-only, and if inventory fails it must not claim completeness.
+  echo "$(vps_agent_text 'Mountpoints at or beneath purge targets:' 'Montagens dentro ou abaixo dos alvos de remoção:')"
+  preview_mounts="$(findmnt --kernel --raw --noheadings --output TARGET)" || {
+    echo "PREVIEW BLOCKED: cannot inventory active mountpoints." >&2
+    exit 1
+  }
+  preview_checkout="$(pwd -P)" || {
+    echo "PREVIEW BLOCKED: cannot resolve checkout directory." >&2
+    exit 1
+  }
+  preview_mount_blocked=0
+  while IFS= read -r mounted_path; do
+    [ -n "$mounted_path" ] || continue
+    for target in state backups; do
+      case "$mounted_path" in
+        "$preview_checkout/$target"|"$preview_checkout/$target/"*)
+          printf '  !! BLOCKED / FOREIGN-REVIEW: %s [purge target: %s]\n' "$mounted_path" "$target"
+          preview_mount_blocked=1
+          ;;
+      esac
+    done
+  done <<< "$preview_mounts"
+  if [ "$preview_mount_blocked" -eq 0 ]; then
+    echo "$(vps_agent_text 'No mountpoints found under state/ or backups/.' 'Nenhuma montagem encontrada dentro de state/ ou backups/.')"
+  fi
   echo "$(vps_agent_text 'Traefik, external networks and third-party projects will be preserved.' 'Traefik, redes externas e projetos de terceiros serão preservados.')"
+  if [ "$preview_mount_blocked" -eq 1 ]; then
+    echo "PREVIEW BLOCKED: foreign or nested mountpoints require operator review before purge." >&2
+    exit 1
+  fi
   echo "$(vps_agent_text 'Preview complete. No changes made.' 'Prévia finalizada. Sem alterações.')"
   exit 0
 fi
@@ -255,13 +286,85 @@ if [ "$mode" = "--purge" ]; then
 fi
 # END PRE-MUTATION PURGE SAFETY GATE
 
-if [ -f .env ]; then
-  set -a
-  . ./.env
-  set +a
-fi
+# Parse installation .env as data, never execute it as shell.
+# Tabular output stays private to this process; errors disclose line numbers,
+# never values or credentials.
+remove_load_literal_env() {
+  local entries key value
+  [ -e .env ] || { [ ! -L .env ] || { echo "REMOVE BLOCKED: .env is a symlink." >&2; return 1; }; return 0; }
+  entries="$(python3 - .env <<'PY'
+import os
+import pathlib
+import re
+import stat
+import sys
 
-# The checkout .env may define COMPOSE_PROJECT_NAME: check AGAIN after sourcing.
+p = pathlib.Path(sys.argv[1])
+allowed = {
+    "COMPOSE_PROJECT_NAME", "VPS_AGENT_WHOLE_HOST", "VPS_AGENT_AUTH_MODE",
+    "VPS_AGENT_BUNDLED_PROXY", "VPS_AGENT_ADMIN_TOKEN", "VPS_AGENT_STATIC_TOKEN",
+    "VPS_AGENT_PUBLIC_URL", "VPS_AGENT_EDGE_NETWORK",
+}
+values = {}
+fd = -1
+try:
+    # Pin the file descriptor with O_NOFOLLOW so a concurrent symlink swap
+    # cannot redirect a privileged parser to a different file.
+    fd = os.open(p, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        sys.exit("REMOVE BLOCKED: .env must be a regular non-symlink file.")
+    if info.st_size > 256 * 1024:
+        sys.exit("REMOVE BLOCKED: .env exceeds maximum safe size.")
+    with os.fdopen(fd, "r", encoding="utf-8") as stream:
+        fd = -1
+        lines = stream.read(256 * 1024 + 1).splitlines()
+    if sum(len(line.encode("utf-8")) + 1 for line in lines) > 256 * 1024:
+        sys.exit("REMOVE BLOCKED: .env exceeds maximum safe size.")
+except (OSError, UnicodeError):
+    sys.exit("REMOVE BLOCKED: .env must be a regular non-symlink file or valid UTF-8.")
+finally:
+    if fd >= 0:
+        os.close(fd)
+for n, line in enumerate(lines, 1):
+    if not line.strip() or line.lstrip().startswith("#"):
+        continue
+    match = re.fullmatch(r"\s*(?:export\s+)?([A-Za-z_][A-Za-z_0-9]*)\s*=\s*(.*)", line)
+    if not match:
+        sys.exit(f"REMOVE BLOCKED: invalid .env assignment at line {n}.")
+    key, raw = match.groups()
+    raw = raw.strip()
+    if raw.startswith(("'", '"')):
+        quote = raw[0]
+        close = raw.find(quote, 1)
+        if close < 0 or (raw[close + 1:].strip() and not raw[close + 1:].strip().startswith("#")):
+            sys.exit(f"REMOVE BLOCKED: invalid .env quote at line {n}.")
+        value = raw[1:close]
+    else:
+        value = re.split(r"\s+#", raw, maxsplit=1)[0].strip()
+        if any(ch.isspace() for ch in value):
+            sys.exit(f"REMOVE BLOCKED: unquoted whitespace in .env at line {n}.")
+    if re.search(r"[$\x60;\|<>]", value) or re.search(r"[\x00-\x1f\x7f]", value):
+        sys.exit(f"REMOVE BLOCKED: shell syntax forbidden in .env at line {n}.")
+    if key in allowed:
+        values[key] = value
+for key, value in values.items():
+    print(f"{key}\t{value}")
+PY
+)" || return 1
+  while IFS=$'\t' read -r key value; do
+    [ -n "$key" ] || continue
+    case "$key" in
+      COMPOSE_PROJECT_NAME|VPS_AGENT_WHOLE_HOST|VPS_AGENT_AUTH_MODE|VPS_AGENT_BUNDLED_PROXY|VPS_AGENT_ADMIN_TOKEN|VPS_AGENT_STATIC_TOKEN|VPS_AGENT_PUBLIC_URL|VPS_AGENT_EDGE_NETWORK)
+        printf -v "$key" '%s' "$value"
+        export "$key" ;;
+      *) echo "REMOVE BLOCKED: unknown parsed .env variable." >&2; return 1 ;;
+    esac
+  done <<< "$entries"
+}
+remove_load_literal_env || exit 1
+
+# The checkout .env may define COMPOSE_PROJECT_NAME: check AGAIN after parsing.
 # Never allow its values to redirect `docker compose down` to another project.
 if [ "${COMPOSE_PROJECT_NAME:-mcp-vps-agent}" != "mcp-vps-agent" ]; then
   echo "REMOVE BLOCKED: .env selects a noncanonical Compose project." >&2
