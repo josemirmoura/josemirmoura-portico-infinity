@@ -3,9 +3,8 @@ name: securefs-ownership-e2e
 on:
   pull_request:
     paths:
-      - "internal/securefs/securefs.go"
-      - "internal/securefs/securefs_test.go"
-      - ".github/workflows/securefs-ownership-e2e.yml"
+      - 'internal/securefs/**'
+      - '.github/workflows/securefs-ownership-e2e.yml'
   workflow_dispatch:
 
 permissions:
@@ -13,7 +12,7 @@ permissions:
 
 jobs:
   ownership:
-    name: Owner mapping and symlink safety in disposable Linux filesystem
+    name: Secure filesystem owner mapping and root swap protections
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -21,18 +20,19 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: Unprivileged contract and symlink/scope regressions
+      - name: Unprivileged symlink, scope and owner contract
         run: |
           set -euo pipefail
-          go test -count=1 ./internal/securefs
-      - name: Privileged Broker analog with root process and unprivileged directory owner
+          go test -count=1 -v ./internal/securefs
+      - name: Privileged Broker analog with host operator ownership
         run: |
           set -euo pipefail
           sudo env "PATH=$PATH" "GOCACHE=$RUNNER_TEMP/portico-root-go-cache" \
-            "$(command -v go)" test -count=1 -v ./internal/securefs -run 'TestAtomicWrite(HostOwner|PreservesExistingDifferentOwner|SymlinkTargetRefusedWithoutReplacement|OwnerPreservesForeignRootBoundary)$'
-      - name: Privileged directory ownership does not affect runner files
+            "$(command -v go)" test -count=1 -v ./internal/securefs \
+            -run 'Test(AtomicWrite|OwnerNewDirectoryAndCopyAcrossRoots|AuthorizedRootSwap|AuthorizedAncestorSwap)'
+      - name: Privileged tests preserve GitHub runner identity
         run: |
           set -euo pipefail
           test "$(id -u)" -ne 0
           test -d internal/securefs
-          git status --porcelain
+          test -z "$(git status --porcelain)"

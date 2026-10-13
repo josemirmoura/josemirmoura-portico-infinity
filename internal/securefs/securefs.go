@@ -204,7 +204,7 @@ func (m *Manager) MkdirAll(dirname string, perm os.FileMode) error {
 		return errors.New("directory creation escaped authorized anchor")
 	}
 
-	root, err := os.OpenRoot(anchor)
+	root, err := openRootNoSymlink(anchor)
 	if err != nil {
 		return err
 	}
@@ -236,8 +236,30 @@ func (m *Manager) MkdirAll(dirname string, perm os.FileMode) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		// New directories must remain editable by the authorized host owner,
+		// not silently become root-owned when the Broker runs as root.
+		parentInfo, err := root.Stat(filepath.Dir(current))
+		if err != nil {
+			return err
+		}
+		parentStat, ok := parentInfo.Sys().(*syscall.Stat_t)
+		if !ok {
+			return errors.New("cannot verify parent owner for new directory")
+		}
 		if err := root.Mkdir(current, perm.Perm()); err != nil {
 			return err
+		}
+		dirHandle, err := root.OpenFile(current, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			return err
+		}
+		ownerErr := dirHandle.Chown(int(parentStat.Uid), int(parentStat.Gid))
+		closeErr := dirHandle.Close()
+		if ownerErr != nil {
+			return fmt.Errorf("cannot transfer new directory to verified host owner: %w", ownerErr)
+		}
+		if closeErr != nil {
+			return closeErr
 		}
 	}
 	return nil
@@ -272,7 +294,7 @@ func (m *Manager) Stat(filename string, write bool) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return Entry{}, err
 	}
@@ -295,7 +317,7 @@ func (m *Manager) List(dirname string, limit int) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +348,7 @@ func (m *Manager) Hash(filename string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return "", err
 	}
@@ -387,7 +409,7 @@ func (m *Manager) CopyFile(src, dst string) error {
 	if dstRel == "." {
 		return errors.New("destination cannot be an authorized root directory")
 	}
-	srcRoot, err := os.OpenRoot(m.physical(srcRootPath))
+	srcRoot, err := openRootNoSymlink(m.physical(srcRootPath))
 	if err != nil {
 		return err
 	}
@@ -408,7 +430,7 @@ func (m *Manager) CopyFile(src, dst string) error {
 		return fmt.Errorf("file exceeds copy limit of %d bytes", MaxCopyBytes)
 	}
 
-	dstRoot, err := os.OpenRoot(m.physical(dstRootPath))
+	dstRoot, err := openRootNoSymlink(m.physical(dstRootPath))
 	if err != nil {
 		return err
 	}
@@ -423,6 +445,12 @@ func (m *Manager) CopyFile(src, dst string) error {
 	if dir != "." {
 		tmp = filepath.Join(dir, tmp)
 	}
+	// Keep destination owner's UID/GID on replacement, or inherit the
+	// verified destination-directory owner for newly copied files.
+	uid, gid, err := atomicWriteOwner(dstRoot, dir, dstRel)
+	if err != nil {
+		return err
+	}
 	out, err := dstRoot.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
 	if err != nil {
 		return err
@@ -436,6 +464,9 @@ func (m *Manager) CopyFile(src, dst string) error {
 	}()
 	if _, err := io.Copy(out, in); err != nil {
 		return err
+	}
+	if err := out.Chown(uid, gid); err != nil {
+		return fmt.Errorf("cannot apply verified destination owner before copy rename: %w", err)
 	}
 	if err := out.Sync(); err != nil {
 		return err
@@ -463,7 +494,7 @@ func (m *Manager) Move(src, dst string) error {
 		return errors.New("cannot move an authorized root directory")
 	}
 	if srcRootPath == dstRootPath {
-		root, err := os.OpenRoot(m.physical(srcRootPath))
+		root, err := openRootNoSymlink(m.physical(srcRootPath))
 		if err != nil {
 			return err
 		}
@@ -509,7 +540,7 @@ func (m *Manager) Remove(target string, recursive bool) error {
 	if rel == "." {
 		return errors.New("refusing to delete an authorized root itself")
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return err
 	}
@@ -535,7 +566,7 @@ func (m *Manager) Chmod(target string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return err
 	}
@@ -556,7 +587,7 @@ func (m *Manager) Chown(target string, uid, gid int) error {
 	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return err
 	}
@@ -574,7 +605,7 @@ func (m *Manager) ReadFile(filename string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return nil, err
 	}
@@ -635,7 +666,7 @@ func (m *Manager) WriteFileAtomic(filename string, data []byte) error {
 	if rel == "." {
 		return errors.New("cannot overwrite root directory")
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return err
 	}
