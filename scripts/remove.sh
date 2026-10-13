@@ -146,6 +146,28 @@ if [ -f .env ]; then
   set +a
 fi
 
+# BEGIN REMOVAL PREVIEW
+# Read-only inventory; no container, state, volume or credential mutation.
+if [ "$dry_run" -eq 1 ]; then
+  echo "$(vps_agent_text 'PRÉVIA DA REMOÇÃO (nenhuma alteração executada)' 'REMOVAL PREVIEW (no changes made)')"
+  echo "$(vps_agent_text 'Contêineres do projeto:' 'Project containers:')"
+  docker ps -a --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Names}} {{.Status}}'
+  echo "$(vps_agent_text 'Volumes do projeto:' 'Project volumes:')"
+  docker volume ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}'
+  echo "$(vps_agent_text 'Redes do projeto:' 'Project networks:')"
+  docker network ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}'
+  echo "$(vps_agent_text 'Estado local identificado:' 'Local state identified:')"
+  for target in .env config/policy.yaml state backups; do
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      printf '  %s\n' "$target"
+    fi
+  done
+  echo "$(vps_agent_text 'Traefik, redes externas e projetos de terceiros serão preservados.' 'Traefik, external networks and third-party projects will be preserved.')"
+  echo "$(vps_agent_text 'Prévia finalizada. Sem alterações.' 'Preview complete. No changes made.')"
+  exit 0
+fi
+# END REMOVAL PREVIEW
+
 if [ "$mode" = "--purge" ] && [ "${VPS_AGENT_PURGE_CONFIRM:-}" != "PURGE" ]; then
   if [ ! -t 0 ]; then
     echo "$(vps_agent_text 'Full purge requires VPS_AGENT_PURGE_CONFIRM=PURGE in non-interactive mode.' 'O purge completo requer VPS_AGENT_PURGE_CONFIRM=PURGE em modo não interativo.')" >&2
