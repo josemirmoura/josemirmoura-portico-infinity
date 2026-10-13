@@ -304,7 +304,10 @@ if [ "$mode" = "--purge" ]; then
 fi
 # END PRE-MUTATION PURGE SAFETY GATE
 
-project_ids="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent 2>/dev/null || true)"
+project_ids="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)" || {
+  echo "REMOVE BLOCKED: cannot re-inventory project containers before mutation." >&2
+  exit 1
+}
 if [ "$mode" = "safe" ] && [ -n "$project_ids" ] && [ ! -f .env ]; then
   echo "REMOVE BLOCKED: running project containers without .env; cannot confirm temporary grant revocation in safe mode." >&2
   exit 1
