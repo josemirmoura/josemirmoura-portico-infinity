@@ -117,6 +117,81 @@ if [ -z "$owned_project_ids" ] && [ "$mode" = "--purge" ] && [ "$dry_run" -eq 0 
 fi
 # END REMOVE PROJECT OWNERSHIP GUARD
 
+# Read-only preflight for every purge-owned local target. A bind mount nested
+# anywhere in state/ or backups/ must fail CLOSED before rotating credentials,
+# stopping containers, invoking Compose, or deleting any data.
+preflight_local_purge_targets() {
+  local repo_physical checkout_uid path absolute owner_uid mountpoint_path mounts
+  repo_physical="$(pwd -P)"
+  checkout_uid="$(stat -c '%u' -- "$repo_physical")" || return 1
+  command -v findmnt >/dev/null 2>&1 || {
+    echo "REMOVE BLOCKED: findmnt is required to verify protected mountpoints." >&2
+    return 1
+  }
+  mounts="$(findmnt -rn -o TARGET)" || {
+    echo "REMOVE BLOCKED: cannot inventory mounted filesystems." >&2
+    return 1
+  }
+  if [ -L .env ] || [ -L config ] || [ -L config/policy.yaml ]; then
+    echo "REMOVE BLOCKED: purge configuration target is a symbolic link." >&2
+    return 1
+  fi
+  for path in state backups; do
+    if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+      continue
+    fi
+    if [ -L "$path" ] || [ ! -d "$path" ]; then
+      echo "REMOVE BLOCKED: purge state target is not a trusted directory: $path" >&2
+      return 1
+    fi
+    absolute="$(realpath -e -- "$path")" || return 1
+    if [ "$absolute" != "$repo_physical/$path" ]; then
+      echo "REMOVE BLOCKED: purge target resolves outside its checkout: $path" >&2
+      return 1
+    fi
+    owner_uid="$(stat -c '%u' -- "$path")" || return 1
+    if [ "$owner_uid" != "0" ] && [ "$owner_uid" != "$checkout_uid" ]; then
+      echo "REMOVE BLOCKED: state directory belongs to an unrelated host UID: $path" >&2
+      return 1
+    fi
+    while IFS= read -r mountpoint_path; do
+      [ -n "$mountpoint_path" ] || continue
+      case "$mountpoint_path" in
+        "$absolute"|"$absolute"/*)
+          echo "REMOVE BLOCKED: external mountpoint under purge target: $path" >&2
+          return 1
+          ;;
+      esac
+    done <<< "$mounts"
+  done
+}
+
+preflight_purge_volumes() {
+  local inventory volume owner
+  inventory="$(docker volume ls --format '{{.Name}}')" || {
+    echo "REMOVE BLOCKED: cannot inventory Docker volumes before any mutation." >&2
+    return 1
+  }
+  for volume in \
+    mcp-vps-agent_broker-run \
+    mcp-vps-agent_operator-run \
+    mcp-vps-agent_zitadel-postgres-data \
+    mcp-vps-agent_zitadel-bootstrap \
+    mcp-vps-agent_vps-agent-letsencrypt
+  do
+    if grep -Fxq -- "$volume" <<< "$inventory"; then
+      owner="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$volume")" || {
+        echo "REMOVE BLOCKED: cannot verify Docker volume ownership: $volume" >&2
+        return 1
+      }
+      if [ "$owner" != "mcp-vps-agent" ]; then
+        echo "REMOVE BLOCKED: package-named Docker volume has foreign/uncertain owner: $volume" >&2
+        return 1
+      fi
+    fi
+  done
+}
+
 remove_legacy_sandbox() {
   [ -d /opt/vps-agent-sandbox ] || return 0
   if rmdir /opt/vps-agent-sandbox >/dev/null 2>&1; then
@@ -148,6 +223,18 @@ if [ "$dry_run" -eq 1 ]; then
   docker ps -a --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Names}} {{.Status}}'
   echo "$(vps_agent_text 'Project volumes:' 'Volumes do projeto:')"
   docker volume ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}'
+  echo "$(vps_agent_text 'Package-named volume ownership checks (read-only):' 'Propriedade dos volumes com nomes do pacote (somente leitura):')"
+  package_volumes="$(docker volume ls --format '{{.Name}}')" || exit 1
+  for volume in mcp-vps-agent_broker-run mcp-vps-agent_operator-run mcp-vps-agent_zitadel-postgres-data mcp-vps-agent_zitadel-bootstrap mcp-vps-agent_vps-agent-letsencrypt; do
+    if grep -Fxq -- "$volume" <<< "$package_volumes"; then
+      owner="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$volume" 2>/dev/null)" || owner="UNKNOWN"
+      if [ "$owner" = "mcp-vps-agent" ]; then
+        printf '  OWNED   %s\n' "$volume"
+      else
+        printf '  BLOCKED %s (owner: %s)\n' "$volume" "$owner"
+      fi
+    fi
+  done
   echo "$(vps_agent_text 'Project networks:' 'Redes do projeto:')"
   docker network ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}'
   echo "$(vps_agent_text 'Default locally tagged package images:' 'Imagens locais padrão do pacote:')"
@@ -164,6 +251,10 @@ if [ "$dry_run" -eq 1 ]; then
 fi
 # END REMOVAL PREVIEW
 
+if [ -L .env ]; then
+  echo "REMOVE BLOCKED: .env is a symlink; refusing to source it." >&2
+  exit 1
+fi
 if [ -f .env ]; then
   set -a
   . ./.env
@@ -222,7 +313,21 @@ Source checkout: $([ "$remove_source" -eq 1 ] && echo DELETE || echo PRESERVED)
 EOF
 fi
 
+# PRE-MUTATION SAFETY GATE: do not rotate credentials or stop services
+# unless all local targets and volume owners are safe for an actual purge.
+if [ "$mode" = "--purge" ]; then
+  preflight_local_purge_targets
+  preflight_purge_volumes
+fi
 project_ids="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent 2>/dev/null || true)"
+# Safe removal preserves audit/grant state: without .env there is no verified
+# authenticated channel for revoke-all. Fail closed even with orphaned state.
+if [ "$mode" = "safe" ] && [ ! -f .env ] &&
+   { [ -n "$project_ids" ] || [ -e state ] || [ -L state ]; }; then
+  echo "REMOVE BLOCKED: safe removal without .env cannot prove grants revoked." >&2
+  exit 1
+fi
+
 if [ ! -f .env ] && [ -z "$project_ids" ]; then
   if [ "$mode" = "--purge" ]; then
     rm -rf -- state backups
@@ -257,6 +362,10 @@ fi
 # A safe removal preserves the Broker grant database, so silent revoke
 # failure could resurrect temporary permissions on restart. Refuse to claim
 # success unless revocation completed. Purge erases grants with Broker state.
+if [ "$mode" = "safe" ] && { [ ! -f .env ] || [ -z "$project_ids" ]; }; then
+  echo "REMOVE BLOCKED: safe removal cannot verify Broker revocation channel." >&2
+  exit 1
+fi
 if [ -f .env ] && [ -n "$project_ids" ]; then
   echo "$(vps_agent_text 'Revoking temporary grants before shutdown...' 'Revogando autorizações temporárias antes do desligamento...')"
   if ! docker compose exec -T broker /usr/local/bin/vps-agent revoke-all --socket /run/vps-agent/broker.sock >/dev/null 2>&1; then
