@@ -187,64 +187,9 @@ if [ "$dry_run" -eq 1 ]; then
 fi
 # END REMOVAL PREVIEW
 
-if [ -f .env ]; then
-  set -a
-  . ./.env
-  set +a
-fi
-
-# The checkout .env may define COMPOSE_PROJECT_NAME: check AGAIN after sourcing.
-# Never allow its values to redirect `docker compose down` to another project.
-if [ "${COMPOSE_PROJECT_NAME:-mcp-vps-agent}" != "mcp-vps-agent" ]; then
-  echo "REMOVE BLOCKED: .env selects a noncanonical Compose project." >&2
-  exit 1
-fi
-
-
-if [ "$mode" = "--purge" ] && [ "${VPS_AGENT_PURGE_CONFIRM:-}" != "PURGE" ]; then
-  if [ ! -t 0 ]; then
-    echo "$(vps_agent_text 'Full purge requires VPS_AGENT_PURGE_CONFIRM=PURGE in non-interactive mode.' 'O purge completo requer VPS_AGENT_PURGE_CONFIRM=PURGE em modo não interativo.')" >&2
-    exit 1
-  fi
-  printf '%s' "$(vps_agent_text 'Type PURGE to delete this Portico MCP installation configuration/state: ' 'Digite PURGE para apagar a configuração/estado desta instalação do Portico MCP: ')"
-  read -r answer
-  if [ "$answer" != "PURGE" ]; then
-    echo "$(vps_agent_text 'Purge cancelled.' 'Purge cancelado.')"
-    exit 1
-  fi
-fi
-
-if [ "$remove_source" -eq 1 ] && [ "${VPS_AGENT_REMOVE_SOURCE_CONFIRM:-}" != "REMOVE_SOURCE" ]; then
-  if [ ! -t 0 ]; then
-    echo "$(vps_agent_text 'Source deletion requires VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE in non-interactive mode.' 'A remoção do código requer VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE em modo não interativo.')" >&2
-    exit 1
-  fi
-  printf '%s' "$(vps_agent_text 'Type REMOVE_SOURCE to also delete this Git checkout: ' 'Digite REMOVE_SOURCE para apagar também este checkout Git: ')"
-  read -r source_answer
-  if [ "$source_answer" != "REMOVE_SOURCE" ]; then
-    echo "$(vps_agent_text 'Source deletion cancelled.' 'Remoção do código cancelada.')"
-    exit 1
-  fi
-fi
-
-if vps_agent_is_pt_br; then
-  cat <<EOF
-Modo de remoção: $mode
-Runtime: Gateway + Broker + proxy do pacote (quando configurado)
-Recursos gerenciados da VPS: PRESERVADOS
-Policy/auditoria do operador: $([ "$mode" = "safe" ] && echo PRESERVADAS || echo APAGADAS)
-Checkout do código: $([ "$remove_source" -eq 1 ] && echo APAGAR || echo PRESERVAR)
-EOF
-else
-  cat <<EOF
-Removal mode: $mode
-Runtime: Gateway + Broker + package proxy (when configured)
-Managed VPS resources: PRESERVED
-Operator policy/audit: $([ "$mode" = "safe" ] && echo PRESERVED || echo DELETED)
-Source checkout: $([ "$remove_source" -eq 1 ] && echo DELETE || echo PRESERVED)
-EOF
-fi
-
+# Verify destructive purge targets before loading shell-derived configuration.
+# This gate must run before .env is sourced, or a guard failure could occur
+# after untrusted shell substitutions have already executed.
 # BEGIN PRE-MUTATION PURGE SAFETY GATE
 # All project-volume ownership and local data guards run before credential
 # rotation, container stops, Compose down or any rm -rf.
@@ -303,6 +248,66 @@ if [ "$mode" = "--purge" ]; then
   done
 fi
 # END PRE-MUTATION PURGE SAFETY GATE
+
+if [ -f .env ]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
+# The checkout .env may define COMPOSE_PROJECT_NAME: check AGAIN after sourcing.
+# Never allow its values to redirect `docker compose down` to another project.
+if [ "${COMPOSE_PROJECT_NAME:-mcp-vps-agent}" != "mcp-vps-agent" ]; then
+  echo "REMOVE BLOCKED: .env selects a noncanonical Compose project." >&2
+  exit 1
+fi
+
+
+if [ "$mode" = "--purge" ] && [ "${VPS_AGENT_PURGE_CONFIRM:-}" != "PURGE" ]; then
+  if [ ! -t 0 ]; then
+    echo "$(vps_agent_text 'Full purge requires VPS_AGENT_PURGE_CONFIRM=PURGE in non-interactive mode.' 'O purge completo requer VPS_AGENT_PURGE_CONFIRM=PURGE em modo não interativo.')" >&2
+    exit 1
+  fi
+  printf '%s' "$(vps_agent_text 'Type PURGE to delete this Portico MCP installation configuration/state: ' 'Digite PURGE para apagar a configuração/estado desta instalação do Portico MCP: ')"
+  read -r answer
+  if [ "$answer" != "PURGE" ]; then
+    echo "$(vps_agent_text 'Purge cancelled.' 'Purge cancelado.')"
+    exit 1
+  fi
+fi
+
+if [ "$remove_source" -eq 1 ] && [ "${VPS_AGENT_REMOVE_SOURCE_CONFIRM:-}" != "REMOVE_SOURCE" ]; then
+  if [ ! -t 0 ]; then
+    echo "$(vps_agent_text 'Source deletion requires VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE in non-interactive mode.' 'A remoção do código requer VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE em modo não interativo.')" >&2
+    exit 1
+  fi
+  printf '%s' "$(vps_agent_text 'Type REMOVE_SOURCE to also delete this Git checkout: ' 'Digite REMOVE_SOURCE para apagar também este checkout Git: ')"
+  read -r source_answer
+  if [ "$source_answer" != "REMOVE_SOURCE" ]; then
+    echo "$(vps_agent_text 'Source deletion cancelled.' 'Remoção do código cancelada.')"
+    exit 1
+  fi
+fi
+
+if vps_agent_is_pt_br; then
+  cat <<EOF
+Modo de remoção: $mode
+Runtime: Gateway + Broker + proxy do pacote (quando configurado)
+Recursos gerenciados da VPS: PRESERVADOS
+Policy/auditoria do operador: $([ "$mode" = "safe" ] && echo PRESERVADAS || echo APAGADAS)
+Checkout do código: $([ "$remove_source" -eq 1 ] && echo APAGAR || echo PRESERVAR)
+EOF
+else
+  cat <<EOF
+Removal mode: $mode
+Runtime: Gateway + Broker + package proxy (when configured)
+Managed VPS resources: PRESERVED
+Operator policy/audit: $([ "$mode" = "safe" ] && echo PRESERVED || echo DELETED)
+Source checkout: $([ "$remove_source" -eq 1 ] && echo DELETE || echo PRESERVED)
+EOF
+fi
+
+
 
 project_ids="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)" || {
   echo "REMOVE BLOCKED: cannot re-inventory project containers before mutation." >&2
