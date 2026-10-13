@@ -362,11 +362,53 @@ EOF
   exit 0
 fi
 
+# BEGIN VERIFIED PURGE RESOURCES
+# Never ignore Compose failures or discard state needed to recover a purge.
 if [ -f .env ]; then
-  "${compose[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+  "${compose[@]}" down -v --remove-orphans
 fi
 
-docker volume rm   mcp-vps-agent_broker-run   mcp-vps-agent_zitadel-postgres-data   mcp-vps-agent_zitadel-bootstrap   mcp-vps-agent_vps-agent-letsencrypt   >/dev/null 2>&1 || true
+# A previous interrupted run can strand volumes, including operator-run.
+# Remove only fixed package volume names with the expected Compose owner.
+for volume in \
+  mcp-vps-agent_broker-run \
+  mcp-vps-agent_operator-run \
+  mcp-vps-agent_zitadel-postgres-data \
+  mcp-vps-agent_zitadel-bootstrap \
+  mcp-vps-agent_vps-agent-letsencrypt
+do
+  if docker volume inspect "$volume" >/dev/null 2>&1; then
+    owner="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$volume")"
+    if [ "$owner" != "mcp-vps-agent" ]; then
+      echo "REMOVE BLOCKED: volume is not verified as Portico-owned: $volume" >&2
+      exit 1
+    fi
+    docker volume rm "$volume" >/dev/null || {
+      echo "REMOVE INCOMPLETE: failed to remove Portico volume: $volume" >&2
+      exit 1
+    }
+  fi
+done
+
+# Only Compose-labeled private networks: the public Traefik edge is external
+# and must not be removed, including when other services share it.
+networks="$(docker network ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}')"
+while IFS= read -r network; do
+  [ -n "$network" ] || continue
+  if [ "$network" = "${VPS_AGENT_EDGE_NETWORK:-}" ] || [ "$network" = "traefik-public" ]; then
+    continue
+  fi
+  owner="$(docker network inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$network")"
+  if [ "$owner" != "mcp-vps-agent" ]; then
+    echo "REMOVE BLOCKED: unexpected network owner: $network" >&2
+    exit 1
+  fi
+  docker network rm "$network" >/dev/null || {
+    echo "REMOVE INCOMPLETE: failed to remove Portico network: $network" >&2
+    exit 1
+  }
+done <<< "$networks"
+# END VERIFIED PURGE RESOURCES
 
 rm -rf -- state backups
 rm -f -- .env config/policy.yaml
