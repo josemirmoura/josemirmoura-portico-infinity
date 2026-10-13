@@ -215,3 +215,12 @@ chmod 600 state/chatgpt-verified.json
 echo
 echo "$(vps_agent_text 'CHATGPT WEB CONNECTION VERIFIED' 'CONEXÃO COM O CHATGPT WEB VERIFICADA')"
 echo "$(vps_agent_text 'INSTALLATION COMPLETE' 'INSTALAÇÃO CONCLUÍDA')"
+
+# Approval UX is a separate security gate from the ChatGPT tool consent.
+# A read-only diagnostic MUST NOT change a successful authenticated install.
+echo
+echo "$(vps_agent_text 'Operator approval channel (configuration only):' 'Canal de autorização do operador (somente configuração):')"
+if ! python3 scripts/operator-approval-readiness.py --env-file .env; then
+  echo "$(vps_agent_text 'Approval configuration check unavailable. The authenticated SSH operator fallback remains valid.' 'Diagnóstico da Central indisponível. O fallback SSH autenticado continua válido.')" >&2
+fi
+
