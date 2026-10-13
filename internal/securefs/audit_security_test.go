@@ -60,6 +60,40 @@ func TestAuthorizedAncestorSwapToSymlinkNeverEscapes(t *testing.T) {
 	}
 }
 
+// The root path is swapped in parallel with opens, not only after New.
+// Successful reads may return data from the original directory or fail;
+// they must never return bytes redirected through the external symlink.
+func TestConcurrentAuthorizedRootSwapNeverLeaks(t *testing.T) {
+	base := t.TempDir()
+	allowed := filepath.Join(base, "authorized")
+	outside := filepath.Join(base, "external")
+	if err := os.Mkdir(allowed, 0o700); err != nil { t.Fatal(err) }
+	if err := os.Mkdir(outside, 0o700); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(filepath.Join(allowed, "secret"), []byte("allowed"), 0o600); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("outside-data"), 0o600); err != nil { t.Fatal(err) }
+	m, err := New([]string{allowed}, []string{allowed}, 1024)
+	if err != nil { t.Fatal(err) }
+	done := make(chan error, 1)
+	go func() {
+		moved := allowed + "-moved"
+		for i := 0; i < 250; i++ {
+			if err := os.Rename(allowed, moved); err != nil { done <- err; return }
+			if err := os.Symlink(outside, allowed); err != nil { done <- err; return }
+			if err := os.Remove(allowed); err != nil { done <- err; return }
+			if err := os.Rename(moved, allowed); err != nil { done <- err; return }
+		}
+		done <- nil
+	}()
+	for i := 0; i < 2500; i++ {
+		data, err := m.ReadFile(filepath.Join(allowed, "secret"))
+		if err == nil && string(data) != "allowed" {
+			t.Errorf("redirected authorized root leaked foreign data: %q", data)
+			break
+		}
+	}
+	if swapErr := <-done; swapErr != nil { t.Fatalf("adversarial swap failed: %v", swapErr) }
+}
+
 func TestOwnerNewDirectoryAndCopyAcrossRoots(t *testing.T) {
 	if os.Geteuid() != 0 { t.Skip("requires root Broker analog in disposable CI") }
 	base := t.TempDir()
