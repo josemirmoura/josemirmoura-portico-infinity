@@ -313,8 +313,8 @@ ux_requirements = {
     "scripts/connect-chatgpt.sh": [
         "Guia de conexão no GitHub (ChatGPT, Claude, Cursor, VS Code/Copilot):",
         "GitHub connection guide (ChatGPT, Claude, Cursor, VS Code/Copilot):",
-        "https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/main/docs/connect-ai-clients.pt-BR.md",
-        "https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/main/docs/connect-ai-clients.md",
+        "https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/${documentation_ref}/docs/connect-ai-clients.pt-BR.md",
+        "https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/${documentation_ref}/docs/connect-ai-clients.md",
         "Para finalizar o E2E Community atual, conecte o ChatGPT e solicite:",
         "[Enter] verificar conexão",
         "--baseline-only",
