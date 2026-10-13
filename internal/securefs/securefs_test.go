@@ -521,3 +521,79 @@ func TestAtomicWriteOwnerPreservesForeignRootBoundary(t *testing.T) {
 		t.Fatalf("out-of-scope file created: %v", err)
 	}
 }
+
+
+func TestAuthorizedRootSwapAfterNewFailsClosed(t *testing.T) {
+	base := t.TempDir()
+	granted := filepath.Join(base, "granted")
+	outside := filepath.Join(base, "outside")
+	if err := os.Mkdir(granted, 0o750); err != nil { t.Fatal(err) }
+	if err := os.Mkdir(outside, 0o750); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("private"), 0o600); err != nil { t.Fatal(err) }
+
+	m, err := New([]string{granted}, []string{granted}, 1024)
+	if err != nil { t.Fatal(err) }
+	if err := os.Rename(granted, granted+"-parked"); err != nil { t.Fatal(err) }
+	if err := os.Symlink(outside, granted); err != nil { t.Fatal(err) }
+
+	if data, err := m.ReadFile(filepath.Join(granted, "secret")); err == nil {
+		t.Fatalf("root swap revealed unauthorized bytes: %q", data)
+	}
+	if err := m.WriteFileAtomic(filepath.Join(granted, "new.txt"), []byte("unauthorized")); err == nil {
+		t.Fatal("root swap permitted write into outside directory")
+	}
+	if _, err := m.List(granted, 10); err == nil {
+		t.Fatal("root swap permitted directory listing")
+	}
+	if err := m.MkdirAll(filepath.Join(granted, "subdir"), 0o750); err == nil {
+		t.Fatal("root swap permitted mkdir through a replaced root")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("outside target changed: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "subdir")); !os.IsNotExist(err) {
+		t.Fatalf("outside directory created: %v", err)
+	}
+	if err := os.Remove(granted); err != nil { t.Fatal(err) }
+	if err := os.Rename(granted+"-parked", granted); err != nil { t.Fatal(err) }
+	if err := m.WriteFileAtomic(filepath.Join(granted, "restored.txt"), []byte("authorized")); err != nil {
+		t.Fatalf("restoring original root inode should restore access: %v", err)
+	}
+}
+
+func TestAuthorizedAncestorSwapAfterNewFailsClosed(t *testing.T) {
+	base := t.TempDir()
+	parent := filepath.Join(base, "parent")
+	granted := filepath.Join(parent, "grant")
+	outsideParent := filepath.Join(base, "outside")
+	outsideGrant := filepath.Join(outsideParent, "grant")
+	for _, dir := range []string{parent, granted, outsideParent, outsideGrant} {
+		if err := os.Mkdir(dir, 0o750); err != nil { t.Fatal(err) }
+	}
+	if err := os.WriteFile(filepath.Join(outsideGrant, "secret"), []byte("outside"), 0o600); err != nil { t.Fatal(err) }
+	m, err := New([]string{granted}, []string{granted}, 1024)
+	if err != nil { t.Fatal(err) }
+	if err := os.Rename(parent, parent+"-parked"); err != nil { t.Fatal(err) }
+	if err := os.Symlink(outsideParent, parent); err != nil { t.Fatal(err) }
+	if data, err := m.ReadFile(filepath.Join(granted, "secret")); err == nil {
+		t.Fatalf("ancestor swap disclosed outside data: %q", data)
+	}
+	if err := m.WriteFileAtomic(filepath.Join(granted, "attack"), []byte("attack")); err == nil {
+		t.Fatal("ancestor swap permitted writing to unauthorised subtree")
+	}
+	if _, err := os.Stat(filepath.Join(outsideGrant, "attack")); !os.IsNotExist(err) {
+		t.Fatalf("ancestor swap wrote outside: %v", err)
+	}
+}
+
+func TestPinnedMissingRootCanBeCreatedThenUsed(t *testing.T) {
+	base := t.TempDir()
+	granted := filepath.Join(base, "new-tenant", "project")
+	m, err := New([]string{granted}, []string{granted}, 1024)
+	if err != nil { t.Fatal(err) }
+	if err := m.MkdirAll(granted, 0o750); err != nil { t.Fatalf("creation of missing root failed: %v", err) }
+	target := filepath.Join(granted, "verified.txt")
+	if err := m.WriteFileAtomic(target, []byte("yes")); err != nil { t.Fatalf("newly pinned root cannot write: %v", err) }
+	out, err := m.ReadFile(target)
+	if err != nil || string(out) != "yes" { t.Fatalf("newly pinned root cannot read: %q, %v", out, err) }
+}
