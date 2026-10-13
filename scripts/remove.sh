@@ -373,6 +373,32 @@ EOF
 fi
 
 # BEGIN VERIFIED PURGE RESOURCES
+# Compose down -v can delete project-named volumes before a later ownership
+# check. Validate every named removal target BEFORE invoking down -v. A
+# foreign-owned or unlabeled volume is never a safe purge target.
+volume_inventory="$(docker volume ls --format '{{.Name}}')" || {
+  echo "REMOVE BLOCKED: cannot inventory Docker volumes before Compose purge." >&2
+  exit 1
+}
+for volume in \
+  mcp-vps-agent_broker-run \
+  mcp-vps-agent_operator-run \
+  mcp-vps-agent_zitadel-postgres-data \
+  mcp-vps-agent_zitadel-bootstrap \
+  mcp-vps-agent_vps-agent-letsencrypt
+do
+  if printf '%s\n' "$volume_inventory" | grep -Fxq "$volume"; then
+    owner="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$volume")" || {
+      echo "REMOVE BLOCKED: cannot inspect owner of volume before Compose purge: $volume" >&2
+      exit 1
+    }
+    if [ "$owner" != "mcp-vps-agent" ]; then
+      echo "REMOVE BLOCKED: volume not verified as Portico-owned before Compose purge: $volume" >&2
+      exit 1
+    fi
+  fi
+done
+
 # Never ignore Compose failures or discard state needed to recover a purge.
 if [ -f .env ]; then
   "${compose[@]}" down -v --remove-orphans
