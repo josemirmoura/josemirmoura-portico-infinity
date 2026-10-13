@@ -23,7 +23,7 @@ This matrix records concrete pre-release controls. A checked item means the cont
 - [x] DCR and OAuth endpoints have edge rate limiting.
 - [x] application-level concurrent request ceiling exists (default 64; excess requests fail with HTTP 429).
 - [x] MCP request bodies are capped at 1 MiB and Broker IPC decoding is capped at 2 MiB.
-- [x] public OAuth dependency pinned to ZITADEL `v4.19.1`, reviewed as the current latest stable release on 2026-09-28.
+- [ ] E2E2 candidate pins ZITADEL API + Login V2 to patched `v4.19.4` with a persistent signing key of at least 32 characters. Promotion requires disposable integrated OAuth/HTTPS validation; the VPS version is not established by this candidate.
 
 ## Privilege boundary
 
