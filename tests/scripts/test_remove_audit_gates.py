@@ -48,6 +48,7 @@ exit 0
         findmnt = binpath / "findmnt"
         findmnt.write_text("""#!/usr/bin/env bash
 set -euo pipefail
+if [ "${MOCK_FINDMNT_FAIL:-0}" = "1" ]; then exit 29; fi
 echo /
 if [ -n "$MOCK_MOUNT_TARGET" ]; then echo "$MOCK_MOUNT_TARGET"; fi
 """)
@@ -59,6 +60,7 @@ if [ -n "$MOCK_MOUNT_TARGET" ]; then echo "$MOCK_MOUNT_TARGET"; fi
             "MOCK_ACTIVE": "1",
             "MOCK_FOREIGN_VOLUME": "0",
             "MOCK_MOUNT_TARGET": "",
+            "MOCK_FINDMNT_FAIL": "0",
             "VPS_AGENT_PURGE_CONFIRM": "PURGE",
             "VPS_AGENT_LANG": "en",
         }
@@ -241,6 +243,40 @@ if [ -n "$MOCK_MOUNT_TARGET" ]; then echo "$MOCK_MOUNT_TARGET"; fi
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("REMOVE BLOCKED", result.stderr)
         self.assertEqual((self.root / ".env").read_text(), original)
+        self.assert_no_destructive_docker()
+
+    def test_dry_run_reports_bind_mount_below_state_as_blocked(self):
+        nested = self.root / "state" / "third-party"
+        nested.mkdir(parents=True)
+        payload = nested / "never-delete"
+        payload.write_text("foreign-data")
+        result = self.run_remove("--purge", "--dry-run",
+                                 MOCK_MOUNT_TARGET=str(nested))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Mountpoints at or beneath purge targets:", result.stdout)
+        self.assertIn("BLOCKED / FOREIGN-REVIEW", result.stdout)
+        self.assertIn(str(nested), result.stdout)
+        self.assertIn("purge target: state", result.stdout)
+        self.assertIn("PREVIEW BLOCKED", result.stderr)
+        self.assertEqual(payload.read_text(), "foreign-data")
+        self.assert_no_destructive_docker()
+
+    def test_dry_run_reports_exact_backups_mount_as_blocked(self):
+        mount = self.root / "backups"
+        mount.mkdir()
+        result = self.run_remove("--purge", "--dry-run",
+                                 MOCK_MOUNT_TARGET=str(mount))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(str(mount), result.stdout)
+        self.assertIn("purge target: backups", result.stdout)
+        self.assertNotIn("Preview complete", result.stdout)
+        self.assert_no_destructive_docker()
+
+    def test_dry_run_mount_inventory_failure_never_claims_complete(self):
+        result = self.run_remove("--purge", "--dry-run", MOCK_FINDMNT_FAIL="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PREVIEW BLOCKED: cannot inventory active mountpoints", result.stderr)
+        self.assertNotIn("Preview complete", result.stdout)
         self.assert_no_destructive_docker()
 
     def test_state_bind_mount_blocks_purge_before_mutation(self):
