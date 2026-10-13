@@ -597,3 +597,77 @@ func TestPinnedMissingRootCanBeCreatedThenUsed(t *testing.T) {
 	out, err := m.ReadFile(target)
 	if err != nil || string(out) != "yes" { t.Fatalf("newly pinned root cannot read: %q, %v", out, err) }
 }
+
+func TestDirectoryHostOwner(t *testing.T) {
+	if os.Geteuid() != 0 { t.Skip("requires root Broker analog") }
+	root := t.TempDir()
+	const operatorUID, operatorGID = 12345, 12346
+	if err := os.Chown(root, operatorUID, operatorGID); err != nil { t.Fatal(err) }
+	m, err := New([]string{root}, []string{root}, 1024)
+	if err != nil { t.Fatal(err) }
+	deep := filepath.Join(root, "nested", "deep")
+	if err := m.MkdirAll(deep, 0o750); err != nil { t.Fatal(err) }
+	for _, path := range []string{filepath.Join(root, "nested"), deep} {
+		info, err := os.Lstat(path)
+		if err != nil { t.Fatal(err) }
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid != operatorUID || stat.Gid != operatorGID {
+			t.Fatalf("directory %s owner not inherited from authorized parent: %+v", path, info.Sys())
+		}
+	}
+}
+
+func TestCopyFileHostOwner(t *testing.T) {
+	if os.Geteuid() != 0 { t.Skip("requires root Broker analog") }
+	root := t.TempDir()
+	const operatorUID, operatorGID = 12345, 12346
+	const existingUID, existingGID = 12347, 12348
+	if err := os.Chown(root, operatorUID, operatorGID); err != nil { t.Fatal(err) }
+	src := filepath.Join(root, "source.txt")
+	if err := os.WriteFile(src, []byte("data"), 0o600); err != nil { t.Fatal(err) }
+	m, err := New([]string{root}, []string{root}, 1024)
+	if err != nil { t.Fatal(err) }
+	for _, item := range []struct{ file string; uid, gid uint32 }{
+		{filepath.Join(root, "new.txt"), operatorUID, operatorGID},
+		{filepath.Join(root, "existing.txt"), existingUID, existingGID},
+	} {
+		if item.uid == existingUID {
+			if err := os.WriteFile(item.file, []byte("old"), 0o600); err != nil { t.Fatal(err) }
+			if err := os.Chown(item.file, existingUID, existingGID); err != nil { t.Fatal(err) }
+		}
+		if err := m.CopyFile(src, item.file); err != nil { t.Fatal(err) }
+		info, err := os.Lstat(item.file)
+		if err != nil { t.Fatal(err) }
+		meta, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || meta.Uid != item.uid || meta.Gid != item.gid {
+			t.Fatalf("copy %s owner %v, expected %d:%d", item.file, info.Sys(), item.uid, item.gid)
+		}
+	}
+}
+
+func TestMoveAcrossRootsHostOwner(t *testing.T) {
+	if os.Geteuid() != 0 { t.Skip("requires root Broker analog") }
+	base := t.TempDir()
+	srcRoot := filepath.Join(base, "source")
+	dstRoot := filepath.Join(base, "dest")
+	for _, name := range []string{srcRoot, dstRoot} {
+		if err := os.Mkdir(name, 0o750); err != nil { t.Fatal(err) }
+	}
+	const operatorUID, operatorGID = 12345, 12346
+	if err := os.Chown(dstRoot, operatorUID, operatorGID); err != nil { t.Fatal(err) }
+	src := filepath.Join(srcRoot, "payload")
+	dst := filepath.Join(dstRoot, "payload")
+	if err := os.WriteFile(src, []byte("payload"), 0o600); err != nil { t.Fatal(err) }
+	m, err := New([]string{srcRoot, dstRoot}, []string{srcRoot, dstRoot}, 1024)
+	if err != nil { t.Fatal(err) }
+	if err := m.Move(src, dst); err != nil { t.Fatal(err) }
+	info, err := os.Lstat(dst)
+	if err != nil { t.Fatal(err) }
+	meta, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || meta.Uid != operatorUID || meta.Gid != operatorGID {
+		t.Fatalf("cross-root move owner should derive from destination: %+v", info.Sys())
+	}
+	if _, err := os.Lstat(src); !os.IsNotExist(err) {
+		t.Fatalf("source must be absent after move: %v", err)
+	}
+}

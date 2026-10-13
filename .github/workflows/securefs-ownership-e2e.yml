@@ -29,7 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo env "PATH=$PATH" "GOCACHE=$RUNNER_TEMP/portico-root-go-cache" \
-            "$(command -v go)" test -count=1 -v ./internal/securefs -run 'TestAtomicWrite(HostOwner|PreservesExistingDifferentOwner|SymlinkTargetRefusedWithoutReplacement|OwnerPreservesForeignRootBoundary)$'
+            "$(command -v go)" test -count=1 -v ./internal/securefs -run 'Test(AtomicWrite|DirectoryHostOwner|CopyFileHostOwner|MoveAcrossRootsHostOwner)'
       - name: Privileged directory ownership does not affect runner files
         run: |
           set -euo pipefail
