@@ -23,6 +23,8 @@ type Manager struct {
 	writeRoots []string
 	maxBytes   int64
 	hostRoot   string
+	// Test seam for deterministic fchown failure. Nil uses the actual syscall.
+	mkdirChown func(*os.File, int, int) error
 }
 
 func New(readRoots, writeRoots []string, maxBytes int64) (*Manager, error) {
@@ -251,15 +253,32 @@ func (m *Manager) MkdirAll(dirname string, perm os.FileMode) error {
 		}
 		dirHandle, err := root.OpenFile(current, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
 		if err != nil {
-			return err
+			return fmt.Errorf("created directory %q but cannot open for owner verification; MANUAL RECOVERY may be required: %w", filepath.Join(anchor, current), err)
 		}
-		ownerErr := dirHandle.Chown(int(parentStat.Uid), int(parentStat.Gid))
-		closeErr := dirHandle.Close()
+		var ownerErr error
+		if m.mkdirChown != nil {
+			ownerErr = m.mkdirChown(dirHandle, int(parentStat.Uid), int(parentStat.Gid))
+		} else {
+			ownerErr = dirHandle.Chown(int(parentStat.Uid), int(parentStat.Gid))
+		}
 		if ownerErr != nil {
-			return fmt.Errorf("cannot transfer new directory to verified host owner: %w", ownerErr)
+			// An unprivileged user may not be able to traverse a residual
+			// root-owned directory. Roll back only the same empty inode;
+			// never blindly remove a path replaced by another process.
+			opened, statErr := dirHandle.Stat()
+			_ = dirHandle.Close()
+			if statErr == nil {
+				currentInfo, lookupErr := root.Lstat(current)
+				if lookupErr == nil && os.SameFile(opened, currentInfo) {
+					if cleanupErr := root.Remove(current); cleanupErr == nil {
+						return fmt.Errorf("created directory %q: fchown failed and empty directory was rolled back: %w", filepath.Join(anchor, current), ownerErr)
+					}
+				}
+			}
+			return fmt.Errorf("created directory %q: fchown failed; partial directory may remain, MANUAL RECOVERY required: %w", filepath.Join(anchor, current), ownerErr)
 		}
-		if closeErr != nil {
-			return closeErr
+		if err := dirHandle.Close(); err != nil {
+			return fmt.Errorf("created directory %q: close failed after chown, inspect directory before retry: %w", filepath.Join(anchor, current), err)
 		}
 	}
 	return nil
