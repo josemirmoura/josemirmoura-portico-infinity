@@ -5,6 +5,8 @@ cd "$(dirname "$0")/.."
 
 # shellcheck source=scripts/lib/product.sh
 source scripts/lib/product.sh
+# shellcheck source=scripts/lib/masked-password.sh
+source scripts/lib/masked-password.sh
 vps_agent_init_language ""
 
 usage() {
@@ -24,8 +26,8 @@ Opções:
   --bundled-proxy           Força o Traefik embutido em vez de reutilizar um.
   -h, --help                Mostra esta ajuda.
 
-A senha dedicada do operador OAuth é solicitada localmente sem aparecer no
-terminal. Ela não é a senha VPS/SSH e não deve ser fornecida ao ChatGPT.
+A senha dedicada do operador OAuth aparece apenas como asteriscos (*) durante
+a digitação. Ela não é a senha VPS/SSH e não deve ser fornecida ao ChatGPT.
 EOF
   else
     cat <<'EOF'
@@ -43,8 +45,8 @@ Options:
   --bundled-proxy          Force the bundled Traefik instead of reusing one.
   -h, --help               Show this help.
 
-The dedicated OAuth operator password is requested locally without terminal
-echo. It is not the VPS/SSH password and must not be supplied to ChatGPT.
+The dedicated OAuth operator password displays only asterisks (*) while you
+type it. It is not the VPS/SSH password and must not be supplied to ChatGPT.
 EOF
   fi
 }
@@ -508,12 +510,8 @@ if [ "$NEEDS_OPERATOR" -eq 1 ]; then
       exit 1
     fi
     while :; do
-      printf '%s' "$(vps_agent_text 'Create operator password (12+ characters): ' 'Crie a senha do operador (12+ caracteres): ')" >&2
-      read -r -s PASSWORD
-      echo >&2
-      printf '%s' "$(vps_agent_text 'Repeat operator password: ' 'Repita a senha do operador: ')" >&2
-      read -r -s PASSWORD2
-      echo >&2
+      vps_agent_read_masked_password PASSWORD "$(vps_agent_text 'Create operator password (12+ characters): ' 'Crie a senha do operador (12+ caracteres): ')"
+      vps_agent_read_masked_password PASSWORD2 "$(vps_agent_text 'Repeat operator password: ' 'Repita a senha do operador: ')"
       if [ "$PASSWORD" != "$PASSWORD2" ]; then
         echo "$(vps_agent_text 'Passwords do not match.' 'As senhas não coincidem.')" >&2
         continue
