@@ -121,7 +121,9 @@ vps_agent_banner() {
      [[ "$locale_name" == *[Uu][Tt][Ff]-8* || "$locale_name" == *[Uu][Tt][Ff]8* ]] &&
      [[ "$terminal_width" =~ ^[0-9]+$ ]] && [ "$terminal_width" -ge 62 ]; then
     while IFS= read -r line; do
-      printf '| %-58s |\n' "$line"
+      # Bash printf field width counts UTF-8 bytes, not terminal columns.
+      # Pad from Bash's character length instead, preserving a 62-cell frame.
+      printf '| %s%*s |\n' "$line" "$((58 - ${#line}))" ''
     done <<'PORTICO_LOGO'
   ██████   ██████  ██████  ████████ ██  ██████   ██████
   ██   ██ ██    ██ ██   ██    ██    ██ ██       ██    ██
