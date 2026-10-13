@@ -26,6 +26,7 @@ jobs:
           bash -n scripts/setup-integrated-auth.sh
           bash -n scripts/verify-public.sh
           python3 -m unittest discover -s tests/scripts -p 'test_prepare_https_introspection.py' -v
+          python3 -m unittest discover -s tests/scripts -p 'test_zitadel_session_cookie_contract.py' -v
 
       - name: Prepare isolated identity stack
         shell: bash
@@ -41,6 +42,7 @@ jobs:
           DB_SECRET="$(openssl rand -hex 24)"
           BOOTSTRAP_SECRET="T1!$(openssl rand -hex 18)"
           OPERATOR_SECRET="T2!$(openssl rand -hex 18)"
+          COOKIE_SECRET="$(openssl rand -hex 32)"
           {
             echo "VPS_AGENT_ADMIN_TOKEN=$ADMIN_TOKEN"
             echo "VPS_AGENT_STATIC_TOKEN=$STATIC_TOKEN"
@@ -59,7 +61,8 @@ jobs:
             echo "VPS_AGENT_EDGE_NETWORK=ci-edge"
             echo "VPS_AGENT_TRAEFIK_CERTRESOLVER=letsencrypt"
             echo "VPS_AGENT_BUNDLED_PROXY=0"
-            echo "ZITADEL_VERSION=v4.19.1"
+            echo "ZITADEL_VERSION=v4.19.4"
+            echo "ZITADEL_SESSION_COOKIE_SECRET=$COOKIE_SECRET"
             echo "ZITADEL_MASTERKEY=$MASTER_KEY"
             echo "ZITADEL_POSTGRES_DB=zitadel"
             echo "ZITADEL_POSTGRES_USER=zitadel"
@@ -83,6 +86,9 @@ jobs:
             api_status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$api_id" 2>/dev/null || true)"
             login_status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$login_id" 2>/dev/null || true)"
             if [ "$api_status" = healthy ] && [ "$login_status" = healthy ]; then
+              # Assert dedicated session signing secret without exposing its bytes.
+              "${COMPOSE[@]}" exec -T zitadel-login node -e \
+                'if ((process.env.ZITADEL_SESSION_COOKIE_SECRET || "").length < 32) process.exit(1)'
               "${COMPOSE[@]}" ps
               exit 0
             fi
