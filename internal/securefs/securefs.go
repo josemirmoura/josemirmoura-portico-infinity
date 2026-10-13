@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 const DefaultMaxBytes int64 = 8 << 20
@@ -596,6 +597,33 @@ func (m *Manager) ReadFile(filename string) ([]byte, error) {
 	return data, nil
 }
 
+// atomicWriteOwner chooses the effective host owner for a new atomic file.
+// Existing files keep their original UID/GID. For new files, only the
+// directory owner is used. Ownership is never supplied by the model or by
+// any MCP argument. All metadata lookups remain under os.Root confinement.
+func atomicWriteOwner(root *os.Root, dir, rel string) (int, int, error) {
+	info, err := root.Lstat(rel)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return 0, 0, err
+		}
+		info, err = root.Stat(dir)
+		if err != nil {
+			return 0, 0, err
+		}
+		if !info.IsDir() {
+			return 0, 0, errors.New("atomic write parent must be a directory")
+		}
+	} else if !info.Mode().IsRegular() {
+		return 0, 0, errors.New("atomic write target must be a regular file")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, errors.New("cannot verify host UID/GID for atomic write")
+	}
+	return int(stat.Uid), int(stat.Gid), nil
+}
+
 func (m *Manager) WriteFileAtomic(filename string, data []byte) error {
 	if int64(len(data)) > m.maxBytes {
 		return fmt.Errorf("content exceeds %d-byte limit", m.maxBytes)
@@ -614,6 +642,10 @@ func (m *Manager) WriteFileAtomic(filename string, data []byte) error {
 	defer root.Close()
 
 	dir := filepath.Dir(rel)
+	uid, gid, err := atomicWriteOwner(root, dir, rel)
+	if err != nil {
+		return err
+	}
 	base := filepath.Base(rel)
 	var nonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -638,6 +670,11 @@ func (m *Manager) WriteFileAtomic(filename string, data []byte) error {
 	}()
 
 	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	// Chown the exclusive temporary inode before atomic rename. If the Broker
+	// cannot set the verified host owner, fail closed without replacing target.
+	if err := f.Chown(uid, gid); err != nil {
 		return err
 	}
 	if err := f.Sync(); err != nil {

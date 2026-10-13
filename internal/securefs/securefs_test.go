@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"syscall"
 )
 
 func TestReadWriteAndTraversal(t *testing.T) {
@@ -428,5 +429,95 @@ func TestConcurrentSymlinkSwapNeverReadsOutsideRoot(t *testing.T) {
 	got, err := os.ReadFile(outsideFile)
 	if err != nil || string(got) != "outside-secret" {
 		t.Fatalf("outside target changed during race: got=%q err=%v", got, err)
+	}
+}
+
+// TestAtomicWriteHostOwner mirrors the E2E operator case. A Broker running
+// as root must not leave a newly created file root-owned inside an authorized
+// directory owned by an unprivileged operator.
+func TestAtomicWriteHostOwner(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("root required to simulate broker writing into another user's directory")
+	}
+	root := t.TempDir()
+	const operatorUID, operatorGID = 12345, 12346
+	if err := os.Chown(root, operatorUID, operatorGID); err != nil { t.Fatal(err) }
+	m, err := New([]string{root}, []string{root}, 1024)
+	if err != nil { t.Fatal(err) }
+	file := filepath.Join(root, "operator.txt")
+	for _, content := range []string{"created", "overwritten"} {
+		if err := m.WriteFileAtomic(file, []byte(content)); err != nil { t.Fatal(err) }
+		info, err := os.Lstat(file)
+		if err != nil { t.Fatal(err) }
+		meta, ok := info.Sys().(*syscall.Stat_t)
+		if !ok { t.Fatal("stat_t unavailable") }
+		if meta.Uid != operatorUID || meta.Gid != operatorGID {
+			t.Fatalf("file owner %d:%d, expected operator %d:%d",
+				meta.Uid, meta.Gid, operatorUID, operatorGID)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("file mode %o should be limited to owner", info.Mode().Perm())
+		}
+	}
+	data, err := os.ReadFile(file)
+	if err != nil || string(data) != "overwritten" {
+		t.Fatalf("final content %q err=%v", data, err)
+	}
+}
+
+func TestAtomicWritePreservesExistingDifferentOwner(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("root required for distinct existing file and parent owner")
+	}
+	root := t.TempDir()
+	const dirUID, dirGID = 12345, 12346
+	const fileUID, fileGID = 12347, 12348
+	if err := os.Chown(root, dirUID, dirGID); err != nil { t.Fatal(err) }
+	file := filepath.Join(root, "existing.txt")
+	if err := os.WriteFile(file, []byte("before"), 0o600); err != nil { t.Fatal(err) }
+	if err := os.Chown(file, fileUID, fileGID); err != nil { t.Fatal(err) }
+	m, err := New([]string{root}, []string{root}, 1024)
+	if err != nil { t.Fatal(err) }
+	if err := m.WriteFileAtomic(file, []byte("after")); err != nil { t.Fatal(err) }
+	info, err := os.Lstat(file)
+	if err != nil { t.Fatal(err) }
+	meta, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || meta.Uid != fileUID || meta.Gid != fileGID {
+		t.Fatalf("original file owner was not preserved: %+v", info.Sys())
+	}
+}
+
+func TestAtomicWriteSymlinkTargetRefusedWithoutReplacement(t *testing.T) {
+	root := t.TempDir()
+	m, err := New([]string{root}, []string{root}, 1024)
+	if err != nil { t.Fatal(err) }
+	target := filepath.Join(root, "existing.txt")
+	if err := os.WriteFile(target, []byte("original"), 0o600); err != nil { t.Fatal(err) }
+	link := filepath.Join(root, "alias.txt")
+	if err := os.Symlink(target, link); err != nil { t.Skip(err) }
+	if err := m.WriteFileAtomic(link, []byte("new")); err == nil {
+		t.Fatal("atomic write must reject symlink instead of silently replacing it")
+	}
+	info, err := os.Lstat(link)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink was modified or removed: %v", err)
+	}
+	b, err := os.ReadFile(target)
+	if err != nil || string(b) != "original" {
+		t.Fatalf("referent changed: %q err=%v", b, err)
+	}
+}
+
+func TestAtomicWriteOwnerPreservesForeignRootBoundary(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	m, err := New([]string{root}, []string{root}, 1024)
+	if err != nil { t.Fatal(err) }
+	target := filepath.Join(outside, "escape.txt")
+	if err := m.WriteFileAtomic(target, []byte("out")); err == nil {
+		t.Fatal("writes outside root must remain forbidden")
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("out-of-scope file created: %v", err)
 	}
 }
