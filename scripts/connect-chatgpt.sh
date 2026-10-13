@@ -55,87 +55,55 @@ BASELINE="$("${wait_tool[@]}" --baseline-only)"
 }
 
 show_tutorial() {
+  local documentation_url documentation_ref
+  # Link to the exact checked-out code, including unmerged RC candidates.
+  # Only use 'main' if the distributor omitted Git metadata.
+  documentation_ref="$(git rev-parse --verify HEAD 2>/dev/null || printf 'main')"
   echo
   if vps_agent_is_pt_br; then
+    documentation_url="https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/${documentation_ref}/docs/connect-ai-clients.pt-BR.md"
     cat <<EOF
-=== Conectar o Portico MCP ao ChatGPT ===
+=== Portico MCP | Conectar clientes de IA ===
 
-A VPS está pronta. Agora falta conectar o Portico MCP ao ChatGPT.
-Esta próxima parte acontece no ChatGPT Web.
-
-Endereço MCP:
+Endereço MCP da VPS:
   $PUBLIC_URL
 
-1. Abra o ChatGPT no navegador.
-2. Ative o Modo de Desenvolvedor, caso essa opção ainda não esteja ativa.
-3. Vá em Configurações > Aplicativos e escolha criar um novo app MCP.
-4. Quando o ChatGPT pedir o endereço do MCP, use exatamente:
+Guia de conexão no GitHub (ChatGPT, Claude, Cursor, VS Code/Copilot):
+  $documentation_url
 
-   $PUBLIC_URL
+Operador OAuth: $operator_username
 
-5. Escolha OAuth como autenticação.
-6. Na tela de login do Portico MCP, use:
+Conclua a conexão no cliente de IA escolhido usando OAuth e a senha
+do operador que você criou. Nunca use a senha SSH/root da VPS.
 
-   Nome de usuário: $operator_username
-EOF
-    if [ -n "$operator_email" ]; then
-      echo "   E-mail da conta:  $operator_email"
-    fi
-    cat <<'EOF'
+Para finalizar o E2E Community atual, conecte o ChatGPT e solicite:
+  Call system.info on my VPS MCP and tell me the hostname.
 
-   Use a senha de operador criada durante a instalação.
-   Não use sua senha SSH/root/Linux da VPS.
-
-7. Revise as ferramentas encontradas e conclua a criação do app.
-8. Abra um novo chat usando o Portico MCP e envie exatamente:
-
-   Call system.info on my VPS MCP and tell me the hostname.
-
-Essa chamada é apenas um teste inofensivo de conectividade.
-Ela confirma que o ChatGPT realmente conseguiu chegar até esta VPS e que a
-chamada foi autenticada e registrada na auditoria do Broker.
-
-Faça essa conexão no seu tempo.
+Depois volte a este terminal e pressione Enter para verificar a chamada
+autenticada e auditada pelo Broker. O registro de um cliente, sozinho,
+não comprova a instalação completa.
 EOF
   else
+    documentation_url="https://github.com/josemirmoura/mcp-vps-agent-gateway/blob/${documentation_ref}/docs/connect-ai-clients.md"
     cat <<EOF
-=== Connect Portico MCP to ChatGPT ===
+=== Portico MCP | Connect AI clients ===
 
-The VPS side is ready. The last step is connecting Portico MCP to ChatGPT.
-This next part happens in ChatGPT Web.
-
-MCP endpoint:
+VPS MCP endpoint:
   $PUBLIC_URL
 
-1. Open ChatGPT in your browser.
-2. Enable Developer Mode if that option is not already enabled.
-3. Open Settings > Apps and choose to create a new MCP app.
-4. When ChatGPT asks for the MCP endpoint, use exactly:
+GitHub connection guide (ChatGPT, Claude, Cursor, VS Code/Copilot):
+  $documentation_url
 
-   $PUBLIC_URL
+OAuth operator: $operator_username
 
-5. Choose OAuth authentication.
-6. On the Portico MCP login screen, use:
+Connect your chosen AI client using OAuth and the dedicated operator
+password created during setup. Never use VPS SSH/root credentials.
 
-   Username: $operator_username
-EOF
-    if [ -n "$operator_email" ]; then
-      echo "   Account email: $operator_email"
-    fi
-    cat <<'EOF'
+To finish the current Community E2E gate, connect ChatGPT and request:
+  Call system.info on my VPS MCP and tell me the hostname.
 
-   Use the operator password created during installation.
-   Do not use your VPS SSH/root/Linux password.
-
-7. Review the discovered tools and finish creating the app.
-8. Start a new chat using Portico MCP and send exactly:
-
-   Call system.info on my VPS MCP and tell me the hostname.
-
-This is only a harmless connectivity test. It confirms that ChatGPT reached
-this VPS through authenticated MCP and that the Broker audited the call.
-
-Take as much time as you need to complete the connection.
+Then return to this terminal and press Enter to verify the authenticated
+Broker-audited call. Registering a client alone does not complete installation.
 EOF
   fi
 }
@@ -153,9 +121,9 @@ else
   while :; do
     echo
     if vps_agent_is_pt_br; then
-      printf '[Enter] verificar conexão  [T] mostrar tutorial novamente  [S] sair: '
+      printf '[Enter] verificar conexão  [T] mostrar link da documentação  [S] sair: '
     else
-      printf '[Enter] verify connection  [T] show tutorial again  [Q] quit: '
+      printf '[Enter] verify connection  [T] show documentation link  [Q] quit: '
     fi
     read -r answer
 

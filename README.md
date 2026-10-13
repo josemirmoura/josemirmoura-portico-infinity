@@ -83,6 +83,7 @@ See:
 - [First installation, step-by-step acceptance](docs/first-install-acceptance.md) | [Português (Brasil)](docs/first-install-acceptance.pt-BR.md)
 - [Installation contract](docs/installation-contract.md) | [Português (Brasil)](docs/installation-contract.pt-BR.md)
 - [Installation flow](docs/installer-flow.md) | [Português (Brasil)](docs/installer-flow.pt-BR.md)
+- [Connect AI clients: ChatGPT, Claude, Cursor and VS Code](docs/connect-ai-clients.md) | [Português (Brasil)](docs/connect-ai-clients.pt-BR.md)
 - [ChatGPT integration](docs/chatgpt-integration.md) | [Português (Brasil)](docs/chatgpt-integration.pt-BR.md)
 
 ## Authority
