@@ -25,7 +25,7 @@ jobs:
         run: |
           set -euo pipefail
           go test -count=1 ./internal/securefs
-      - name: Privileged Broker analog: root process, unprivileged directory owner
+      - name: Privileged Broker analog with root process and unprivileged directory owner
         run: |
           set -euo pipefail
           sudo env "PATH=$PATH" "GOCACHE=$RUNNER_TEMP/portico-root-go-cache" \
