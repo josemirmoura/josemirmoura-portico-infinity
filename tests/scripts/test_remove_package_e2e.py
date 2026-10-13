@@ -35,7 +35,15 @@ if [ "$1" = "volume" ] && [ "$2" = "inspect" ]; then
   exit 0
 fi
 if [ "$1" = "network" ] && [ "$2" = "ls" ]; then
-  printf '%s\n' "mcp-vps-agent_default" "traefik-public"
+  if [ -f "$MOCK_NETWORK_REMOVED" ]; then
+    echo "traefik-public"
+  else
+    printf '%s\n' "mcp-vps-agent_default" "traefik-public"
+  fi
+  exit 0
+fi
+if [ "$1" = "network" ] && [ "$2" = "rm" ]; then
+  touch "$MOCK_NETWORK_REMOVED"
   exit 0
 fi
 if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then
@@ -51,6 +59,7 @@ exit 0
         self.env = os.environ | {
             "PATH": str(self.fake) + os.pathsep + os.environ.get("PATH", ""),
             "MOCK_DOCKER_LOG": str(self.log),
+            "MOCK_NETWORK_REMOVED": str(self.dir / "network-removed"),
             "MOCK_VOLUME_OWNER": "mcp-vps-agent",
             "MOCK_FAIL_VOLUME_RM": "0",
             "VPS_AGENT_LANG": "en",
