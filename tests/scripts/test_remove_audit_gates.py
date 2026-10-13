@@ -103,8 +103,8 @@ if [ -n "$MOCK_MOUNT_TARGET" ]; then echo "$MOCK_MOUNT_TARGET"; fi
         sentinel = self.root / "never-execute-env"
         # A compromised .env must not run commands before a STOP preflight.
         (self.root / ".env").write_text(
-            "COMPOSE_PROJECT_NAME=mcp-vps-agent\\n"
-            + "UNTRUSTED=$(touch " + str(sentinel) + ")\\n"
+            "COMPOSE_PROJECT_NAME=mcp-vps-agent\n"
+            + "UNTRUSTED=$(touch " + str(sentinel) + ")\n"
         )
         result = self.run_remove("--purge", MOCK_FOREIGN_VOLUME="1")
         self.assertNotEqual(result.returncode, 0)
