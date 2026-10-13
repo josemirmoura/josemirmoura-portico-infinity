@@ -408,6 +408,22 @@ while IFS= read -r network; do
     exit 1
   }
 done <<< "$networks"
+# Final fence: a purge may not report success when an unrecognized
+# Compose-labeled volume remains. Investigate manually instead of pruning.
+remaining_volumes="$(docker volume ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}')"
+if [ -n "$remaining_volumes" ]; then
+  echo "REMOVE INCOMPLETE: project volumes remain: $remaining_volumes" >&2
+  exit 1
+fi
+remaining_networks="$(docker network ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}')"
+while IFS= read -r network; do
+  [ -n "$network" ] || continue
+  if [ "$network" != "${VPS_AGENT_EDGE_NETWORK:-}" ] && [ "$network" != "traefik-public" ]; then
+    echo "REMOVE INCOMPLETE: project network remains: $network" >&2
+    exit 1
+  fi
+done <<< "$remaining_networks"
+
 # END VERIFIED PURGE RESOURCES
 
 rm -rf -- state backups
