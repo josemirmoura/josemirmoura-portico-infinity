@@ -99,6 +99,19 @@ if [ -n "$MOCK_MOUNT_TARGET" ]; then echo "$MOCK_MOUNT_TARGET"; fi
         self.assert_no_destructive_docker()
         self.assertTrue((self.root / ".env").exists())
 
+    def test_foreign_volume_preflight_precedes_env_shell_substitution(self):
+        sentinel = self.root / "never-execute-env"
+        # A compromised .env must not run commands before a STOP preflight.
+        (self.root / ".env").write_text(
+            "COMPOSE_PROJECT_NAME=mcp-vps-agent\\n"
+            + "UNTRUSTED=$(touch " + str(sentinel) + ")\\n"
+        )
+        result = self.run_remove("--purge", MOCK_FOREIGN_VOLUME="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("foreign or unlabeled project-named volume", result.stderr)
+        self.assertFalse(sentinel.exists(), "preflight failure must occur before sourcing .env")
+        self.assert_no_destructive_docker()
+
     def test_state_bind_mount_blocks_purge_before_mutation(self):
         (self.root / ".env").write_text("COMPOSE_PROJECT_NAME=mcp-vps-agent\n")
         state = self.root / "state"
