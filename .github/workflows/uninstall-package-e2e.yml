@@ -6,6 +6,7 @@ on:
       - "scripts/remove.sh"
       - "scripts/lib/product.sh"
       - "tests/scripts/test_remove_package_e2e.py"
+      - "tests/scripts/test_remove_audit_gates.py"
       - ".github/workflows/uninstall-package-e2e.yml"
   workflow_dispatch:
 
@@ -23,6 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s tests/scripts -p 'test_remove_package_e2e.py' -v
+          python3 -m unittest discover -s tests/scripts -p 'test_remove_audit_gates.py' -v
           python3 -m unittest discover -s tests/scripts -p 'test_remove_project_ownership.py' -v
           bash -n scripts/remove.sh
       - name: Real isolated Docker Compose profile removal
