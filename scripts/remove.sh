@@ -254,9 +254,18 @@ if [ "${VPS_AGENT_AUTH_MODE:-}" = "integrated" ] && [ -f compose.integrated-auth
   fi
 fi
 
+# A safe removal preserves the Broker grant database, so silent revoke
+# failure could resurrect temporary permissions on restart. Refuse to claim
+# success unless revocation completed. Purge erases grants with Broker state.
 if [ -f .env ] && [ -n "$project_ids" ]; then
   echo "$(vps_agent_text 'Revoking temporary grants before shutdown...' 'Revogando autorizações temporárias antes do desligamento...')"
-  docker compose exec -T broker /usr/local/bin/vps-agent revoke-all --socket /run/vps-agent/broker.sock >/dev/null 2>&1 || true
+  if ! docker compose exec -T broker /usr/local/bin/vps-agent revoke-all --socket /run/vps-agent/broker.sock >/dev/null 2>&1; then
+    if [ "$mode" = "safe" ]; then
+      echo "REMOVE BLOCKED: temporary grant revocation was not confirmed; safe removal cannot preserve potentially live grants." >&2
+      exit 1
+    fi
+    echo "REMOVE NOTICE: revoke-all not confirmed; full purge must complete and destroy Broker state before removal can be accepted." >&2
+  fi
 fi
 
 if [ -f .env ]; then
