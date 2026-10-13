@@ -262,20 +262,13 @@ func (m *Manager) MkdirAll(dirname string, perm os.FileMode) error {
 			ownerErr = dirHandle.Chown(int(parentStat.Uid), int(parentStat.Gid))
 		}
 		if ownerErr != nil {
-			// An unprivileged user may not be able to traverse a residual
-			// root-owned directory. Roll back only the same empty inode;
-			// never blindly remove a path replaced by another process.
-			opened, statErr := dirHandle.Stat()
+			// Never unlink by name after fchown fails. Another process can
+			// replace current between an inode check and root.Remove(current);
+			// removal would then delete the other process's directory.
+			// Leave the created directory for supervised recovery, even when
+			// it is empty. Do not claim cleanup without an atomic guarantee.
 			_ = dirHandle.Close()
-			if statErr == nil {
-				currentInfo, lookupErr := root.Lstat(current)
-				if lookupErr == nil && os.SameFile(opened, currentInfo) {
-					if cleanupErr := root.Remove(current); cleanupErr == nil {
-						return fmt.Errorf("created directory %q: fchown failed and empty directory was rolled back: %w", filepath.Join(anchor, current), ownerErr)
-					}
-				}
-			}
-			return fmt.Errorf("created directory %q: fchown failed; partial directory may remain, MANUAL RECOVERY required: %w", filepath.Join(anchor, current), ownerErr)
+			return fmt.Errorf("created directory %q: fchown failed; a root-owned partial directory may remain; MANUAL RECOVERY required (no automatic deletion): %w", filepath.Join(anchor, current), ownerErr)
 		}
 		if err := dirHandle.Close(); err != nil {
 			return fmt.Errorf("created directory %q: close failed after chown, inspect directory before retry: %w", filepath.Join(anchor, current), err)
