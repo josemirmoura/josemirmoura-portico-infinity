@@ -195,8 +195,8 @@ if [ -n "$MOCK_MOUNT_TARGET" ]; then echo "$MOCK_MOUNT_TARGET"; fi
         for candidate in candidates:
             with self.subTest(payload=candidate[:12]):
                 (self.root / ".env").write_text(
-                    "COMPOSE_PROJECT_NAME=mcp-vps-agent\\n"
-                    "VPS_AGENT_STATIC_TOKEN=" + candidate + "\\n"
+                    "COMPOSE_PROJECT_NAME=mcp-vps-agent\n"
+                    "VPS_AGENT_STATIC_TOKEN=" + candidate + "\n"
                 )
                 result = self.run_remove("--purge", MOCK_ACTIVE="0",
                                          VPS_AGENT_PURGE_CONFIRM="")
@@ -208,12 +208,12 @@ if [ -n "$MOCK_MOUNT_TARGET" ]; then echo "$MOCK_MOUNT_TARGET"; fi
 
     def test_quoted_utf8_spaces_comments_urls_and_secrets_are_literal(self):
         (self.root / ".env").write_text(
-            "# This file has plain data, not executable shell.\\n"
-            "export COMPOSE_PROJECT_NAME = mcp-vps-agent\\n"
-            "VPS_AGENT_AUTH_MODE='integrated'\\n"
-            'VPS_AGENT_PUBLIC_URL="https://exemplo.org/mcp?origem=São Paulo&lang=pt" # ok\\n'
-            'VPS_AGENT_STATIC_TOKEN="segredo com espaços e # literal"\\n'
-            "ZITADEL_VERSION=v4.19.4\\n"
+            "# This file has plain data, not executable shell.\n"
+            "export COMPOSE_PROJECT_NAME = mcp-vps-agent\n"
+            "VPS_AGENT_AUTH_MODE='integrated'\n"
+            'VPS_AGENT_PUBLIC_URL="https://exemplo.org/mcp?origem=São Paulo&lang=pt" # ok\n'
+            'VPS_AGENT_STATIC_TOKEN="segredo com espaços e # literal"\n'
+            "ZITADEL_VERSION=v4.19.4\n"
         )
         result = self.run_remove("--purge", MOCK_ACTIVE="0",
                                  VPS_AGENT_PURGE_CONFIRM="")
@@ -224,17 +224,17 @@ if [ -n "$MOCK_MOUNT_TARGET" ]; then echo "$MOCK_MOUNT_TARGET"; fi
 
     def test_symlinked_env_is_rejected_before_mutation(self):
         outside = self.root / "external-secret"
-        outside.write_text("COMPOSE_PROJECT_NAME=mcp-vps-agent\\n")
+        outside.write_text("COMPOSE_PROJECT_NAME=mcp-vps-agent\n")
         (self.root / ".env").symlink_to(outside)
         result = self.run_remove("--purge", MOCK_ACTIVE="0",
                                  VPS_AGENT_PURGE_CONFIRM="")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(".env is a symlink", result.stderr)
-        self.assertEqual(outside.read_text(), "COMPOSE_PROJECT_NAME=mcp-vps-agent\\n")
+        self.assertEqual(outside.read_text(), "COMPOSE_PROJECT_NAME=mcp-vps-agent\n")
         self.assert_no_destructive_docker()
 
     def test_malformed_env_does_not_mutate_configuration(self):
-        original = "COMPOSE_PROJECT_NAME=mcp-vps-agent\\nVPS_AGENT_STATIC_TOKEN=ok bogus\\n"
+        original = "COMPOSE_PROJECT_NAME=mcp-vps-agent\nVPS_AGENT_STATIC_TOKEN=ok bogus\n"
         (self.root / ".env").write_text(original)
         result = self.run_remove("--purge", MOCK_ACTIVE="0",
                                  VPS_AGENT_PURGE_CONFIRM="")
