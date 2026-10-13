@@ -311,7 +311,44 @@ func (m *Manager) MkdirAll(dirname string, perm os.FileMode) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		// Use only the parent already confined by the pinned root FD.
+		// No model-controlled UID/GID is accepted for a new directory.
+		parent := filepath.Dir(current)
+		parentInfo, err := root.Stat(parent)
+		if err != nil || !parentInfo.IsDir() {
+			return errors.New("cannot verify directory parent ownership")
+		}
+		parentStat, ok := parentInfo.Sys().(*syscall.Stat_t)
+		if !ok {
+			return errors.New("cannot verify directory parent UID/GID")
+		}
 		if err := root.Mkdir(current, perm.Perm()); err != nil {
+			return err
+		}
+		createdInfo, err := root.Lstat(current)
+		if err != nil || !createdInfo.IsDir() || createdInfo.Mode()&os.ModeSymlink != 0 {
+			return errors.New("created directory changed before ownership assignment")
+		}
+		createdID, err := fileIdentity(createdInfo)
+		if err != nil {
+			return err
+		}
+		dirFD, err := root.Open(current)
+		if err != nil {
+			return err
+		}
+		openedInfo, err := dirFD.Stat()
+		if err != nil || !sameIdentity(openedInfo, createdID) {
+			_ = dirFD.Close()
+			return errors.New("created directory inode changed before ownership assignment")
+		}
+		// If assigning the verified owner fails, fail closed instead of
+		// reporting a successful directory with inaccessible root ownership.
+		if err := dirFD.Chown(int(parentStat.Uid), int(parentStat.Gid)); err != nil {
+			_ = dirFD.Close()
+			return err
+		}
+		if err := dirFD.Close(); err != nil {
 			return err
 		}
 	}
@@ -516,6 +553,10 @@ func (m *Manager) CopyFile(src, dst string) error {
 	}
 	defer dstRoot.Close()
 	dir := filepath.Dir(dstRel)
+	uid, gid, err := atomicWriteOwner(dstRoot, dir, dstRel)
+	if err != nil {
+		return err
+	}
 	base := filepath.Base(dstRel)
 	var nonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -537,6 +578,11 @@ func (m *Manager) CopyFile(src, dst string) error {
 		}
 	}()
 	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	// Existing destination retains its owner; a new copy inherits the
+	// verified destination directory UID/GID, never the Broker root UID.
+	if err := out.Chown(uid, gid); err != nil {
 		return err
 	}
 	if err := out.Sync(); err != nil {
