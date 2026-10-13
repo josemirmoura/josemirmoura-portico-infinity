@@ -187,7 +187,38 @@ if [ "$dry_run" -eq 1 ]; then
       printf '  %s\n' "$target"
     fi
   done
+  # Show mountpoints within state/backups *before* the operator authorizes a
+  # purge. These paths may contain unrelated bind-mounted data. A preview is
+  # read-only, and if inventory fails it must not claim completeness.
+  echo "$(vps_agent_text 'Mountpoints at or beneath purge targets:' 'Montagens dentro ou abaixo dos alvos de remoção:')"
+  preview_mounts="$(findmnt --kernel --raw --noheadings --output TARGET)" || {
+    echo "PREVIEW BLOCKED: cannot inventory active mountpoints." >&2
+    exit 1
+  }
+  preview_checkout="$(pwd -P)" || {
+    echo "PREVIEW BLOCKED: cannot resolve checkout directory." >&2
+    exit 1
+  }
+  preview_mount_blocked=0
+  while IFS= read -r mounted_path; do
+    [ -n "$mounted_path" ] || continue
+    for target in state backups; do
+      case "$mounted_path" in
+        "$preview_checkout/$target"|"$preview_checkout/$target/"*)
+          printf '  !! BLOCKED / FOREIGN-REVIEW: %s [purge target: %s]\n' "$mounted_path" "$target"
+          preview_mount_blocked=1
+          ;;
+      esac
+    done
+  done <<< "$preview_mounts"
+  if [ "$preview_mount_blocked" -eq 0 ]; then
+    echo "$(vps_agent_text 'No mountpoints found under state/ or backups/.' 'Nenhuma montagem encontrada dentro de state/ ou backups/.')"
+  fi
   echo "$(vps_agent_text 'Traefik, external networks and third-party projects will be preserved.' 'Traefik, redes externas e projetos de terceiros serão preservados.')"
+  if [ "$preview_mount_blocked" -eq 1 ]; then
+    echo "PREVIEW BLOCKED: foreign or nested mountpoints require operator review before purge." >&2
+    exit 1
+  fi
   echo "$(vps_agent_text 'Preview complete. No changes made.' 'Prévia finalizada. Sem alterações.')"
   exit 0
 fi
