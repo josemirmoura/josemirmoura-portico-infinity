@@ -163,6 +163,8 @@ if [ "$dry_run" -eq 1 ]; then
   docker volume ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}'
   echo "$(vps_agent_text 'Project networks:' 'Redes do projeto:')"
   docker network ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}'
+  echo "$(vps_agent_text 'Default locally tagged package images:' 'Imagens locais padrão do pacote:')"
+  docker image ls --filter reference=mcp-vps-agent-gateway:local --filter reference=mcp-vps-agent-broker:local --format '{{.Repository}}:{{.Tag}}'
   echo "$(vps_agent_text 'Local state identified:' 'Estado local identificado:')"
   for target in .env config/policy.yaml state backups; do
     if [ -e "$target" ] || [ -L "$target" ]; then
