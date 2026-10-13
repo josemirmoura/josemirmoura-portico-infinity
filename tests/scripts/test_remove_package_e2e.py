@@ -30,6 +30,13 @@ class RemovalPackageTests(unittest.TestCase):
 set -euo pipefail
 printf '%s\n' "$*" >>"$MOCK_DOCKER_LOG"
 if [ "$1" = "ps" ]; then exit 0; fi
+if [ "$1" = "volume" ] && [ "$2" = "ls" ]; then
+  # Simulate an already-existing project-named volume owned by a third party.
+  if [ "$MOCK_VOLUME_OWNER" = "another-project" ]; then
+    echo "mcp-vps-agent_operator-run"
+  fi
+  exit 0
+fi
 if [ "$1" = "volume" ] && [ "$2" = "inspect" ]; then
   if [ "$3" = "--format" ]; then echo "$MOCK_VOLUME_OWNER"; fi
   exit 0
@@ -149,6 +156,9 @@ exit 0
         result = self._run_purge_block(MOCK_VOLUME_OWNER="another-project")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("REMOVE BLOCKED", result.stderr)
+        self.assertIn("before Compose purge", result.stderr)
+        self.assertFalse(any(" down -v" in x for x in self.commands()),
+                         "foreign-owned volume must be blocked BEFORE docker compose down -v")
         self.assertFalse(any(x.startswith("volume rm ") for x in self.commands()))
 
     def test_volume_removal_error_is_not_hidden(self):
