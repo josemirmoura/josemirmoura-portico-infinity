@@ -96,9 +96,10 @@ exit 0
         self.assertFalse(sentinel.exists(), "preview must not evaluate shell code from .env")
     def test_env_cannot_change_compose_project_name(self):
         (self.dir / ".env").write_text("COMPOSE_PROJECT_NAME=foreign-project\n")
+        env = self.env | {"VPS_AGENT_PURGE_CONFIRM": "PURGE"}
         result = subprocess.run(
-            ["bash", "scripts/remove.sh", "--purge", "--dry-run"],
-            cwd=self.dir, env=self.env, capture_output=True, text=True, timeout=15,
+            ["bash", "scripts/remove.sh", "--purge"],
+            cwd=self.dir, env=env, capture_output=True, text=True, timeout=15,
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("noncanonical Compose project", result.stderr)
