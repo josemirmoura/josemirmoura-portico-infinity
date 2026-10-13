@@ -148,6 +148,29 @@ if [ "$dry_run" -eq 1 ]; then
   docker ps -a --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Names}} {{.Status}}'
   echo "$(vps_agent_text 'Project volumes:' 'Volumes do projeto:')"
   docker volume ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}'
+  echo "$(vps_agent_text 'Canonical package volume names (even if foreign-owned):' 'Volumes com nomes do pacote (inclusive se pertencem a terceiros):')"
+  preview_all_volumes="$(docker volume ls --format '{{.Name}}')" || {
+    echo "PREVIEW BLOCKED: Docker volume inventory unavailable." >&2
+    exit 1
+  }
+  for volume in \
+    mcp-vps-agent_broker-run \
+    mcp-vps-agent_operator-run \
+    mcp-vps-agent_zitadel-postgres-data \
+    mcp-vps-agent_zitadel-bootstrap \
+    mcp-vps-agent_vps-agent-letsencrypt
+  do
+    if grep -Fxq -- "$volume" <<< "$preview_all_volumes"; then
+      preview_owner="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$volume")" || {
+        echo "PREVIEW BLOCKED: volume ownership unavailable: $volume" >&2
+        exit 1
+      }
+      printf '  %s [owner=%s]\n' "$volume" "$preview_owner"
+      if [ "$preview_owner" != "mcp-vps-agent" ]; then
+        printf '  !! FOREIGN/UNVERIFIED: purge will refuse this volume.\n'
+      fi
+    fi
+  done
   echo "$(vps_agent_text 'Project networks:' 'Redes do projeto:')"
   docker network ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}'
   echo "$(vps_agent_text 'Default locally tagged package images:' 'Imagens locais padrão do pacote:')"
