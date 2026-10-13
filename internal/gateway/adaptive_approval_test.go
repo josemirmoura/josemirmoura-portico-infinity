@@ -125,3 +125,48 @@ func TestCommunityExternalHTTPSIsDefaultEvenWithNativeClientCapabilities(t *test
 		}
 	}
 }
+
+// A host-native "Always allow this tool" choice is NEVER a root grant.
+// Both the URL and CLI fallbacks must explain the separate operator step.
+func TestChatToolConsentDoesNotGrantRootAccess(t *testing.T) {
+  for _, portal := range []string{"", "https://operator.example.test/operator"} {
+    t.Run(portal, func(t *testing.T) {
+      t.Setenv("PORTICO_APPROVAL_SURFACE", "")
+      t.Setenv("VPS_AGENT_OPERATOR_PORTAL_URL", portal)
+      t.Setenv("VPS_AGENT_MCP_APPS", "1")
+      ts := httptest.NewServer(Handler(approvalExecutor{}, AuthConfig{Mode: "none", StaticSubject: "alice"}))
+      defer ts.Close()
+      options := &mcp.ClientOptions{Capabilities: &mcp.ClientCapabilities{
+        Extensions: map[string]any{approvalExtension: map[string]any{"mimeTypes": []string{approvalAppMIME}}},
+      }}
+      client := mcp.NewClient(&mcp.Implementation{Name: "chat-host-consent", Version: "v1"}, options)
+      session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: ts.URL + "/mcp"}, nil)
+      if err != nil { t.Fatal(err) }
+      defer session.Close()
+      result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+        Name: "permissions.request_root_access",
+        Arguments: map[string]any{"root": "/opt/project-a", "access": "read", "ttl_seconds": 600},
+      })
+      if err != nil || result.IsError { t.Fatalf("request: %v %v", err, result) }
+      payload, err := json.Marshal(result.StructuredContent)
+      if err != nil { t.Fatal(err) }
+      for _, want := range []string{
+        `"client_tool_consent_grants_root_access":false`,
+        `"operator_authentication_required":true`,
+        "Permitir uma vez/Sempre permitir",
+        "permissions.approval_status",
+      } {
+        if !strings.Contains(string(payload), want) { t.Fatalf("missing %s: %s", want, payload) }
+      }
+      if portal == "" && !strings.Contains(string(payload), `"approval_method":"operator_fallback"`) {
+        t.Fatalf("fallback missing: %s", payload)
+      }
+      if portal != "" && !strings.Contains(string(payload), `"approval_method":"operator_web"`) {
+        t.Fatalf("web flow missing: %s", payload)
+      }
+      if strings.Contains(string(payload), `"status":"approved"`) {
+        t.Fatalf("tool consent cannot approve root: %s", payload)
+      }
+    })
+  }
+}

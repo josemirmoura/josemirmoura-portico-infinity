@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'internal/gateway/approval_app.html'
+      - 'internal/gateway/adaptive_approval.go'
+      - 'internal/gateway/adaptive_approval_test.go'
       - 'web/operator-approval/**'
       - 'tests/browser/**'
       - '.github/workflows/adaptive-approval-browser.yml'
@@ -11,6 +13,8 @@ on:
     branches: [main]
     paths:
       - 'internal/gateway/approval_app.html'
+      - 'internal/gateway/adaptive_approval.go'
+      - 'internal/gateway/adaptive_approval_test.go'
       - 'web/operator-approval/**'
       - 'tests/browser/**'
       - '.github/workflows/adaptive-approval-browser.yml'

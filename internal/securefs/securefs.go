@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 const DefaultMaxBytes int64 = 8 << 20
@@ -203,7 +204,7 @@ func (m *Manager) MkdirAll(dirname string, perm os.FileMode) error {
 		return errors.New("directory creation escaped authorized anchor")
 	}
 
-	root, err := os.OpenRoot(anchor)
+	root, err := openRootNoSymlink(anchor)
 	if err != nil {
 		return err
 	}
@@ -235,8 +236,30 @@ func (m *Manager) MkdirAll(dirname string, perm os.FileMode) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		// New directories must remain editable by the authorized host owner,
+		// not silently become root-owned when the Broker runs as root.
+		parentInfo, err := root.Stat(filepath.Dir(current))
+		if err != nil {
+			return err
+		}
+		parentStat, ok := parentInfo.Sys().(*syscall.Stat_t)
+		if !ok {
+			return errors.New("cannot verify parent owner for new directory")
+		}
 		if err := root.Mkdir(current, perm.Perm()); err != nil {
 			return err
+		}
+		dirHandle, err := root.OpenFile(current, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			return err
+		}
+		ownerErr := dirHandle.Chown(int(parentStat.Uid), int(parentStat.Gid))
+		closeErr := dirHandle.Close()
+		if ownerErr != nil {
+			return fmt.Errorf("cannot transfer new directory to verified host owner: %w", ownerErr)
+		}
+		if closeErr != nil {
+			return closeErr
 		}
 	}
 	return nil
@@ -271,7 +294,7 @@ func (m *Manager) Stat(filename string, write bool) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return Entry{}, err
 	}
@@ -294,7 +317,7 @@ func (m *Manager) List(dirname string, limit int) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +348,7 @@ func (m *Manager) Hash(filename string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return "", err
 	}
@@ -386,7 +409,7 @@ func (m *Manager) CopyFile(src, dst string) error {
 	if dstRel == "." {
 		return errors.New("destination cannot be an authorized root directory")
 	}
-	srcRoot, err := os.OpenRoot(m.physical(srcRootPath))
+	srcRoot, err := openRootNoSymlink(m.physical(srcRootPath))
 	if err != nil {
 		return err
 	}
@@ -407,7 +430,7 @@ func (m *Manager) CopyFile(src, dst string) error {
 		return fmt.Errorf("file exceeds copy limit of %d bytes", MaxCopyBytes)
 	}
 
-	dstRoot, err := os.OpenRoot(m.physical(dstRootPath))
+	dstRoot, err := openRootNoSymlink(m.physical(dstRootPath))
 	if err != nil {
 		return err
 	}
@@ -422,6 +445,12 @@ func (m *Manager) CopyFile(src, dst string) error {
 	if dir != "." {
 		tmp = filepath.Join(dir, tmp)
 	}
+	// Keep destination owner's UID/GID on replacement, or inherit the
+	// verified destination-directory owner for newly copied files.
+	uid, gid, err := atomicWriteOwner(dstRoot, dir, dstRel)
+	if err != nil {
+		return err
+	}
 	out, err := dstRoot.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
 	if err != nil {
 		return err
@@ -435,6 +464,9 @@ func (m *Manager) CopyFile(src, dst string) error {
 	}()
 	if _, err := io.Copy(out, in); err != nil {
 		return err
+	}
+	if err := out.Chown(uid, gid); err != nil {
+		return fmt.Errorf("cannot apply verified destination owner before copy rename: %w", err)
 	}
 	if err := out.Sync(); err != nil {
 		return err
@@ -462,7 +494,7 @@ func (m *Manager) Move(src, dst string) error {
 		return errors.New("cannot move an authorized root directory")
 	}
 	if srcRootPath == dstRootPath {
-		root, err := os.OpenRoot(m.physical(srcRootPath))
+		root, err := openRootNoSymlink(m.physical(srcRootPath))
 		if err != nil {
 			return err
 		}
@@ -508,7 +540,7 @@ func (m *Manager) Remove(target string, recursive bool) error {
 	if rel == "." {
 		return errors.New("refusing to delete an authorized root itself")
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return err
 	}
@@ -534,7 +566,7 @@ func (m *Manager) Chmod(target string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return err
 	}
@@ -555,7 +587,7 @@ func (m *Manager) Chown(target string, uid, gid int) error {
 	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return err
 	}
@@ -573,7 +605,7 @@ func (m *Manager) ReadFile(filename string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return nil, err
 	}
@@ -596,6 +628,33 @@ func (m *Manager) ReadFile(filename string) ([]byte, error) {
 	return data, nil
 }
 
+// atomicWriteOwner chooses the effective host owner for a new atomic file.
+// Existing files keep their original UID/GID. For new files, only the
+// directory owner is used. Ownership is never supplied by the model or by
+// any MCP argument. All metadata lookups remain under os.Root confinement.
+func atomicWriteOwner(root *os.Root, dir, rel string) (int, int, error) {
+	info, err := root.Lstat(rel)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return 0, 0, err
+		}
+		info, err = root.Stat(dir)
+		if err != nil {
+			return 0, 0, err
+		}
+		if !info.IsDir() {
+			return 0, 0, errors.New("atomic write parent must be a directory")
+		}
+	} else if !info.Mode().IsRegular() {
+		return 0, 0, errors.New("atomic write target must be a regular file")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, errors.New("cannot verify host UID/GID for atomic write")
+	}
+	return int(stat.Uid), int(stat.Gid), nil
+}
+
 func (m *Manager) WriteFileAtomic(filename string, data []byte) error {
 	if int64(len(data)) > m.maxBytes {
 		return fmt.Errorf("content exceeds %d-byte limit", m.maxBytes)
@@ -607,13 +666,17 @@ func (m *Manager) WriteFileAtomic(filename string, data []byte) error {
 	if rel == "." {
 		return errors.New("cannot overwrite root directory")
 	}
-	root, err := os.OpenRoot(m.physical(rootPath))
+	root, err := openRootNoSymlink(m.physical(rootPath))
 	if err != nil {
 		return err
 	}
 	defer root.Close()
 
 	dir := filepath.Dir(rel)
+	uid, gid, err := atomicWriteOwner(root, dir, rel)
+	if err != nil {
+		return err
+	}
 	base := filepath.Base(rel)
 	var nonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -638,6 +701,11 @@ func (m *Manager) WriteFileAtomic(filename string, data []byte) error {
 	}()
 
 	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	// Chown the exclusive temporary inode before atomic rename. If the Broker
+	// cannot set the verified host owner, fail closed without replacing target.
+	if err := f.Chown(uid, gid); err != nil {
 		return err
 	}
 	if err := f.Sync(); err != nil {

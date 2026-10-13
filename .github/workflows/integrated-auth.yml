@@ -26,6 +26,7 @@ jobs:
           bash -n scripts/setup-integrated-auth.sh
           bash -n scripts/verify-public.sh
           python3 -m unittest discover -s tests/scripts -p 'test_prepare_https_introspection.py' -v
+          python3 -m unittest discover -s tests/scripts -p 'test_zitadel_session_cookie_contract.py' -v
 
       - name: Prepare isolated identity stack
         shell: bash
@@ -41,6 +42,7 @@ jobs:
           DB_SECRET="$(openssl rand -hex 24)"
           BOOTSTRAP_SECRET="T1!$(openssl rand -hex 18)"
           OPERATOR_SECRET="T2!$(openssl rand -hex 18)"
+          COOKIE_SECRET="$(openssl rand -hex 32)"
           {
             echo "VPS_AGENT_ADMIN_TOKEN=$ADMIN_TOKEN"
             echo "VPS_AGENT_STATIC_TOKEN=$STATIC_TOKEN"
@@ -59,7 +61,8 @@ jobs:
             echo "VPS_AGENT_EDGE_NETWORK=ci-edge"
             echo "VPS_AGENT_TRAEFIK_CERTRESOLVER=letsencrypt"
             echo "VPS_AGENT_BUNDLED_PROXY=0"
-            echo "ZITADEL_VERSION=v4.19.1"
+            echo "ZITADEL_VERSION=v4.19.4"
+            echo "ZITADEL_SESSION_COOKIE_SECRET=$COOKIE_SECRET"
             echo "ZITADEL_MASTERKEY=$MASTER_KEY"
             echo "ZITADEL_POSTGRES_DB=zitadel"
             echo "ZITADEL_POSTGRES_USER=zitadel"
@@ -83,6 +86,9 @@ jobs:
             api_status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$api_id" 2>/dev/null || true)"
             login_status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$login_id" 2>/dev/null || true)"
             if [ "$api_status" = healthy ] && [ "$login_status" = healthy ]; then
+              # Assert dedicated session signing secret without exposing its bytes.
+              "${COMPOSE[@]}" exec -T zitadel-login node -e \
+                'if ((process.env.ZITADEL_SESSION_COOKIE_SECRET || "").length < 32) process.exit(1)'
               "${COMPOSE[@]}" ps
               exit 0
             fi
@@ -134,6 +140,57 @@ jobs:
           assert x.get('userId') == 'ci-operator-001', x
           print('DEDICATED OPERATOR: PASS')
           PY
+
+          # Separate crash-recovery scenario: one planned UUID, real ZITADEL
+          # GET 404 before POST, then GET 200 on a resumed installer run.
+          umask 077
+          RECOVERY_DIR="$(mktemp -d "$RUNNER_TEMP/portico-oauth-recovery.XXXXXXXX")"
+          chmod 700 "$RECOVERY_DIR"
+          RECOVERY_JOURNAL="$RECOVERY_DIR/oauth-operator-create.json"
+          RECOVERY_MARKER="$RECOVERY_DIR/integrated-auth.json"
+          RECOVERY_ID="$(python3 scripts/oauth-operator-reconcile.py prepare "$RECOVERY_JOURNAL" \
+            mcp.example.invalid ci-recovery ci-recovery@example.invalid)"
+          get_recovery_user() {
+            docker run --rm -i --network ci-edge curlimages/curl:8.16.0 \
+              -sS -H "Host: mcp.example.invalid" -H "X-Forwarded-Proto: https" \
+              -H "Authorization: Bearer $PAT" \
+              --write-out '\n__PORTICO_HTTP_STATUS__%{http_code}' \
+              "http://zitadel-api:8080/v2/users/$RECOVERY_ID" >"$RECOVERY_DIR/lookup.txt"
+            python3 scripts/oauth-operator-reconcile.py probe "$RECOVERY_DIR/lookup.txt" \
+              "$RECOVERY_ID" ci-recovery ci-recovery@example.invalid
+          }
+          test "$(get_recovery_user)" = "ABSENT"
+          python3 - "$RECOVERY_ID" <<'PY' >"$RECOVERY_DIR/create-body.json"
+          import json,os,sys
+          print(json.dumps({
+            "userId":sys.argv[1], "username":"ci-recovery",
+            "profile":{"givenName":"CI","familyName":"Recovery",
+                       "displayName":"CI Recovery","preferredLanguage":"en"},
+            "email":{"email":"ci-recovery@example.invalid","isVerified":True},
+            "password":{"password":os.environ["CI_OPERATOR_SECRET"],"changeRequired":False}
+          }))
+          PY
+          curl_ci -X POST http://zitadel-api:8080/v2/users/human \
+            -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" \
+            --data-binary @- <"$RECOVERY_DIR/create-body.json" >"$RECOVERY_DIR/create-response.json"
+          python3 - "$RECOVERY_DIR/create-response.json" "$RECOVERY_ID" <<'PY'
+          import json,sys
+          assert json.load(open(sys.argv[1])).get("userId")==sys.argv[2]
+          PY
+          # Simulate crash after HTTP 200 but BEFORE .env or marker commit.
+          test "$(python3 scripts/oauth-operator-reconcile.py prepare "$RECOVERY_JOURNAL" \
+            mcp.example.invalid ci-recovery ci-recovery@example.invalid)" = "$RECOVERY_ID"
+          test "$(get_recovery_user)" = "FOUND"
+          python3 - "$RECOVERY_MARKER" "$RECOVERY_ID" <<'PY'
+          import json,sys
+          with open(sys.argv[1],"w") as stream:
+              json.dump({"domain":"mcp.example.invalid","subject":sys.argv[2],
+                         "username":"ci-recovery","email":"ci-recovery@example.invalid"},stream)
+          PY
+          python3 scripts/oauth-operator-reconcile.py finalize \
+            "$RECOVERY_JOURNAL" "$RECOVERY_MARKER" "$RECOVERY_ID"
+          test ! -e "$RECOVERY_JOURNAL"
+          echo "REAL ZITADEL OPERATOR CRASH RECOVERY: PASS"
 
           curl_ci             -X POST http://zitadel-api:8080/management/v1/projects             -H "Authorization: Bearer $PAT"             -H 'Content-Type: application/json'             --data '{"name":"MCP VPS Agent Resource CI"}'             > /tmp/resource-project.json
           RESOURCE_PROJECT_ID="$(python3 - <<'PY'
@@ -494,7 +551,7 @@ jobs:
           printf 'disposable scoped-state sentinel\n' > "$lab/migrate/state/sentinel"
           printf 'version: 1\nmode: scoped\n' > "$lab/migrate/config/policy.yaml"
           python3 - "$lab/migrate/.env" <<'PY'
-          import json,pathlib,sys
+          import json,pathlib,secrets,sys
           app=json.load(open("/tmp/introspection-app.json",encoding="utf-8"))
           cfg={
               "VPS_AGENT_AUTH_MODE":"integrated",
@@ -510,6 +567,7 @@ jobs:
               "VPS_AGENT_BUNDLED_PROXY":"0",
               "VPS_AGENT_PUBLIC_URL":"https://mcp.example.invalid/mcp",
               "ZITADEL_MASTERKEY":"00000000000000000000000000000000",
+              "ZITADEL_SESSION_COOKIE_SECRET":secrets.token_hex(32),
               "ZITADEL_POSTGRES_PASSWORD":"disposable-not-started",
               "ZITADEL_BOOTSTRAP_ADMIN_PASSWORD":"disposable-not-started",
               "ZITADEL_BOOTSTRAP_PAT_EXPIRATION":"2099-01-01T00:00:00Z",

@@ -155,6 +155,9 @@ func (s *Server) presentApproval(ctx context.Context, req *mcp.CallToolRequest, 
 	out["cancel_tool"] = "permissions.cancel_approval"
 	out["retry_after_seconds"] = 3
 	out["operator_authentication_required"] = true
+	// The host tool consent dialog (Allow once/Always allow) permits this tool
+	// invocation only. It is not a filesystem grant or operator decision.
+	out["client_tool_consent_grants_root_access"] = false
 	out["operator_approval_guide"] = "docs/operator-approval-fallback.md"
 	id, _ := out["request_id"].(string)
 	out["operator_cli"] = "python3 scripts/operator-approvals.py --request " + id
@@ -167,12 +170,12 @@ func (s *Server) presentApproval(ctx context.Context, req *mcp.CallToolRequest, 
 	out["client_capabilities"] = map[string]bool{"mcp_apps": support.Apps, "elicitation_form": support.Form, "elicitation_url": support.URL}
 	out["approval_method"] = "operator_fallback"
 	out["approval_channel"] = "cli"
-	out["message"] = "Pedido pendente. Use o terminal SSH autenticado para decidir. A IA não pode aprovar o próprio pedido."
+	out["message"] = "A janela Permitir uma vez/Sempre permitir do chat só autoriza a chamada da ferramenta, não a pasta. Pedido ainda pendente: decida pelo terminal SSH autenticado. A IA não pode aprovar o próprio pedido."
 	if link != "" {
 		out["operator_approval_url"] = link
 		out["approval_method"] = "operator_web"
 		out["approval_channel"] = "https"
-		out["message"] = "Pedido pendente. Abra em outra aba: " + link + " . Confirme ou negue como operador autenticado. Depois consulte permissions.approval_status para continuar somente se o Broker confirmar acesso."
+		out["message"] = "A janela Permitir uma vez/Sempre permitir do chat só autoriza a chamada da ferramenta, não a pasta. Pedido pendente: abra em outra aba a Central " + link + " . Confirme ou negue como operador autenticado. Depois consulte permissions.approval_status; somente o Broker pode conceder acesso."
 	}
 	// The operator-approved HTTPS link is the primary Community UX even if
 	// the host advertises MCP Apps or elicitation. Host-owned modals differ by

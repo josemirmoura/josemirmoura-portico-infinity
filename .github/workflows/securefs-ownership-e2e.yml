@@ -1,0 +1,38 @@
+name: securefs-ownership-e2e
+
+on:
+  pull_request:
+    paths:
+      - 'internal/securefs/**'
+      - '.github/workflows/securefs-ownership-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ownership:
+    name: Secure filesystem owner mapping and root swap protections
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Unprivileged symlink, scope and owner contract
+        run: |
+          set -euo pipefail
+          go test -count=1 -v ./internal/securefs
+      - name: Privileged Broker analog with host operator ownership
+        run: |
+          set -euo pipefail
+          sudo env "PATH=$PATH" "GOCACHE=$RUNNER_TEMP/portico-root-go-cache" \
+            "$(command -v go)" test -count=1 -v ./internal/securefs \
+            -run 'Test(AtomicWrite|OwnerNewDirectoryAndCopyAcrossRoots|AuthorizedRootSwap|AuthorizedAncestorSwap)'
+      - name: Privileged tests preserve GitHub runner identity
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          test -d internal/securefs
+          test -z "$(git status --porcelain)"
