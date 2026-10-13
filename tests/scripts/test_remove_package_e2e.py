@@ -215,6 +215,60 @@ exit 0
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("REMOVE NOTICE", result.stderr)
 
+    def _run_global_purge_preflight(self, **overrides):
+        start = self.script.index("# Read-only preflight for every purge-owned local target")
+        end = self.script.index("remove_legacy_sandbox() {", start)
+        return subprocess.run(
+            ["bash", "-c", "set -euo pipefail\n" + self.script[start:end]
+             + "\npreflight_local_purge_targets\npreflight_purge_volumes\necho PREFLIGHT_PASS\n"],
+            cwd=self.dir, env=self.env | overrides,
+            capture_output=True, text=True, timeout=15,
+        )
+
+    def test_mountpoint_nested_beneath_state_blocks_before_any_mutation(self):
+        (self.dir / "state" / "secret").mkdir(parents=True)
+        findmnt = self.fake / "findmnt"
+        findmnt.write_text("#!/bin/sh\nprintf '%s\\n' '$MOUNT_TARGET'\n")
+        # The fixture must expand the environment variable rather than a literal.
+        findmnt.write_text("#!/bin/sh\nprintf '%s\\n' \"$MOUNT_TARGET\"\n")
+        findmnt.chmod(0o755)
+        path = str(self.dir / "state" / "secret")
+        result = self._run_global_purge_preflight(MOUNT_TARGET=path)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("external mountpoint", result.stderr)
+        self.assertFalse(any(" down " in cmd or cmd.startswith("volume rm ")
+                             for cmd in self.commands()))
+
+    def test_symlinked_state_or_policy_blocks_purge(self):
+        (self.dir / "state").symlink_to(self.dir)
+        result = self._run_global_purge_preflight()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not a trusted directory", result.stderr)
+
+    def test_foreign_volume_is_rejected_by_global_preflight(self):
+        findmnt = self.fake / "findmnt"
+        findmnt.write_text("#!/bin/sh\nexit 0\n")
+        findmnt.chmod(0o755)
+        result = self._run_global_purge_preflight(MOCK_VOLUME_OWNER="another-project")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("foreign/uncertain owner", result.stderr)
+        self.assertFalse(any(" down " in cmd or cmd.startswith("volume rm ")
+                             for cmd in self.commands()))
+
+    def test_safe_without_env_and_live_state_is_blocked(self):
+        marker = "# Safe removal preserves audit/grant state: without .env"
+        start = self.script.index(marker)
+        end = self.script.index("compose=(docker compose", start)
+        (self.dir / "state").mkdir()
+        result = subprocess.run(
+            ["bash", "-c", "set -euo pipefail\nmode=safe\nproject_ids=deadbeefcaf0\n"
+             + self.script[start:end] + "\necho FALSE_SUCCESS\n"],
+            cwd=self.dir, env=self.env, capture_output=True, text=True, timeout=15,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot prove grants revoked", result.stderr)
+        self.assertNotIn("FALSE_SUCCESS", result.stdout)
+
     def test_volume_removal_error_is_not_hidden(self):
         result = self._run_purge_block(MOCK_FAIL_VOLUME_RM="1")
         self.assertNotEqual(result.returncode, 0)
