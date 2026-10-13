@@ -33,7 +33,7 @@ services:
       start_period: 15s
 
   zitadel-api:
-    image: ghcr.io/zitadel/zitadel:${ZITADEL_VERSION:-v4.19.1}
+    image: ghcr.io/zitadel/zitadel:${ZITADEL_VERSION:-v4.19.4}
     restart: unless-stopped
     user: "0"
     command: ["start-from-init", "--masterkey", "${ZITADEL_MASTERKEY:?set ZITADEL_MASTERKEY}"]
@@ -118,13 +118,14 @@ services:
       - traefik.http.routers.vps-agent-auth.priority=100
 
   zitadel-login:
-    image: ghcr.io/zitadel/zitadel-login:${ZITADEL_VERSION:-v4.19.1}
+    image: ghcr.io/zitadel/zitadel-login:${ZITADEL_VERSION:-v4.19.4}
     restart: unless-stopped
     user: "0"
     environment:
       ZITADEL_API_URL: http://zitadel-api:8080
       NEXT_PUBLIC_BASE_PATH: /ui/v2/login
       ZITADEL_SERVICE_USER_TOKEN_FILE: /zitadel/bootstrap/login-client.pat
+      ZITADEL_SESSION_COOKIE_SECRET: ${ZITADEL_SESSION_COOKIE_SECRET:?set ZITADEL_SESSION_COOKIE_SECRET}
       CUSTOM_REQUEST_HEADERS: Host:${VPS_AGENT_DOMAIN},X-Forwarded-Proto:https
     volumes:
       - zitadel-bootstrap:/zitadel/bootstrap:ro
