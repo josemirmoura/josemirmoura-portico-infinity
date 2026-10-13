@@ -108,9 +108,9 @@ if [ -z "$owned_project_ids" ] && [ "$mode" = "--purge" ] && [ "$dry_run" -eq 0 
     echo "REMOVE BLOCKED: cannot inspect Docker images for orphan ownership." >&2
     exit 1
   }
-  if printf '%s\n' "$orphan_volumes" | grep -Eq '^mcp-vps-agent_' ||
-     printf '%s\n' "$orphan_networks" | grep -Eq '^mcp-vps-agent([_-]|$)' ||
-     printf '%s\n' "$local_images" | grep -Eq '^mcp-vps-agent-(gateway|broker):local$'; then
+  if grep -Eq '^mcp-vps-agent_' <<< "$orphan_volumes" ||
+     grep -Eq '^mcp-vps-agent([_-]|$)' <<< "$orphan_networks" ||
+     grep -Eq '^mcp-vps-agent-(gateway|broker):local$' <<< "$local_images"; then
     echo "REMOVE BLOCKED: Pórtico Docker resources remain without an owning container; manual ownership verification required before purge." >&2
     exit 1
   fi
@@ -387,7 +387,7 @@ for volume in \
   mcp-vps-agent_zitadel-bootstrap \
   mcp-vps-agent_vps-agent-letsencrypt
 do
-  if printf '%s\n' "$volume_inventory" | grep -Fxq "$volume"; then
+  if grep -Fxq -- "$volume" <<< "$volume_inventory"; then
     owner="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$volume")" || {
       echo "REMOVE BLOCKED: cannot inspect owner of volume before Compose purge: $volume" >&2
       exit 1
