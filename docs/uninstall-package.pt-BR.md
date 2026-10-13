@@ -48,6 +48,20 @@ autorização de execução ou de merge.**
    remoções por aproximação.
 7. Conservar o backup até que o próximo E2E de reinstalação e OAuth conclua.
 
+### Contratos de autorização destrutiva e remoção segura
+
+- A confirmação de `--purge` deve ser digitada no prompt, ou fornecida
+  explicitamente no ambiente do **processo invocador** por operador autorizado.
+  Uma chave `VPS_AGENT_PURGE_CONFIRM=PURGE` presente **somente no `.env` não vale**.
+- `--remove-source` exige segunda confirmação independente
+  (`VPS_AGENT_REMOVE_SOURCE_CONFIRM=REMOVE_SOURCE` no processo invocador ou
+  entrada digitada). Valores existentes apenas no `.env` são ignorados.
+- `safe` preserva o banco de delegações. Sem Broker/contêineres disponíveis
+  para confirmar a revogação, e com `.env` ou `state/` presentes, a operação
+  **interrompe com REMOVE BLOCKED antes de mutar dados**. Recuperar o Broker
+  para revogação supervisionada, ou executar processo separado de diagnóstico.
+- Não contornar um STOP colocando tokens de confirmação no `.env`.
+
 **Não executar** `docker system prune`, `docker volume prune`,
 `docker network prune`, `docker compose down` em outros projetos, ou
 `rm -rf /opt`.
