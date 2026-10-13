@@ -267,19 +267,47 @@ PY
   echo "$(vps_agent_text 'Local admin/static credentials rotated.' 'Credenciais locais admin/static foram rotacionadas.')"
 fi
 
+# BEGIN PROFILE-AWARE REMOVAL
+# The operator-portal profile is explicitly enabled in the Compose down
+# command. If Compose misses a project container, revalidate both labels
+# before removing that individual container (never a global prune).
 echo "$(vps_agent_text 'Stopping Portico MCP containers...' 'Parando os contêineres do Portico MCP...')"
+down_failed=0
 if [ -f .env ]; then
-  "${compose[@]}" down --remove-orphans
+  "${compose[@]}" down --remove-orphans || down_failed=1
 else
-  [ -z "$project_ids" ] || docker rm -f $project_ids >/dev/null
+  down_failed=1
 fi
 
-left="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent 2>/dev/null || true)"
+left="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)"
+if [ -n "$left" ]; then
+  echo "$(vps_agent_text 'Cleaning up remaining verified Portico profile containers...' 'Removendo contêineres restantes dos perfis do Portico após verificar propriedade...')"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    [[ "$id" =~ ^[0-9a-f]{12,64}$ ]] || { echo "REMOVE BLOCKED: unexpected container ID." >&2; exit 1; }
+    owner="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$id")"
+    project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$id")"
+    if [ "$owner" != "$(pwd -P)" ] || [ "$project" != "mcp-vps-agent" ]; then
+      echo "REMOVE BLOCKED: refusing to remove a container from another checkout." >&2
+      exit 1
+    fi
+    docker rm -f -- "$id" >/dev/null
+  done <<< "$left"
+  if [ -f .env ]; then
+    "${compose[@]}" down --remove-orphans
+    down_failed=0
+  fi
+elif [ "$down_failed" -eq 1 ] && [ -f .env ]; then
+  "${compose[@]}" down --remove-orphans
+  down_failed=0
+fi
+
+left="$(docker ps -aq --filter label=com.docker.compose.project=mcp-vps-agent)"
 if [ -n "$left" ]; then
   echo "$(vps_agent_text "Removal incomplete: package containers still exist: $left" "Remoção incompleta: ainda existem contêineres do pacote: $left")" >&2
   exit 1
 fi
-
+# END PROFILE-AWARE REMOVAL
 if [ -n "${VPS_AGENT_PUBLIC_URL:-}" ]; then
   code="$(curl --silent --show-error --max-time 5 --output /dev/null --write-out '%{http_code}' "${VPS_AGENT_PUBLIC_URL}" 2>/dev/null || true)"
   case "$code" in
