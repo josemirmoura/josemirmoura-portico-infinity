@@ -83,9 +83,11 @@ func TestOwnerNewDirectoryAndCopyAcrossRoots(t *testing.T) {
 			t.Fatalf("%s UID:GID = %v, expected %d:%d", path, info.Sys(), operatorUID, operatorGID)
 		}
 	}
-	// Cross-root Move delegates to CopyFile; verify ownership stays with
-	// destination on the atomic copied file.
-	if err := m.Move(newFile, filepath.Join(dst, "moved")); err != nil { t.Fatal(err) }
+	// A move between distinct authorized roots delegates to CopyFile and
+	// must inherit the destination owner's UID/GID rather than root's.
+	mBoth, err := New([]string{src, dst}, []string{src, dst}, 1024)
+	if err != nil { t.Fatal(err) }
+	if err := mBoth.Move(filepath.Join(src, "seed"), filepath.Join(dst, "moved")); err != nil { t.Fatal(err) }
 	info, err := os.Lstat(filepath.Join(dst, "moved"))
 	if err != nil { t.Fatal(err) }
 	id := info.Sys().(*syscall.Stat_t)
