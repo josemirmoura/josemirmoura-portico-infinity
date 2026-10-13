@@ -149,21 +149,21 @@ fi
 # BEGIN REMOVAL PREVIEW
 # Read-only inventory; no container, state, volume or credential mutation.
 if [ "$dry_run" -eq 1 ]; then
-  echo "$(vps_agent_text 'PRÉVIA DA REMOÇÃO (nenhuma alteração executada)' 'REMOVAL PREVIEW (no changes made)')"
-  echo "$(vps_agent_text 'Contêineres do projeto:' 'Project containers:')"
+  echo "$(vps_agent_text 'REMOVAL PREVIEW (no changes made)' 'PRÉVIA DA REMOÇÃO (nenhuma alteração executada)')"
+  echo "$(vps_agent_text 'Project containers:' 'Contêineres do projeto:')"
   docker ps -a --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Names}} {{.Status}}'
-  echo "$(vps_agent_text 'Volumes do projeto:' 'Project volumes:')"
+  echo "$(vps_agent_text 'Project volumes:' 'Volumes do projeto:')"
   docker volume ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}'
-  echo "$(vps_agent_text 'Redes do projeto:' 'Project networks:')"
+  echo "$(vps_agent_text 'Project networks:' 'Redes do projeto:')"
   docker network ls --filter label=com.docker.compose.project=mcp-vps-agent --format '{{.Name}}'
-  echo "$(vps_agent_text 'Estado local identificado:' 'Local state identified:')"
+  echo "$(vps_agent_text 'Local state identified:' 'Estado local identificado:')"
   for target in .env config/policy.yaml state backups; do
     if [ -e "$target" ] || [ -L "$target" ]; then
       printf '  %s\n' "$target"
     fi
   done
-  echo "$(vps_agent_text 'Traefik, redes externas e projetos de terceiros serão preservados.' 'Traefik, external networks and third-party projects will be preserved.')"
-  echo "$(vps_agent_text 'Prévia finalizada. Sem alterações.' 'Preview complete. No changes made.')"
+  echo "$(vps_agent_text 'Traefik, external networks and third-party projects will be preserved.' 'Traefik, redes externas e projetos de terceiros serão preservados.')"
+  echo "$(vps_agent_text 'Preview complete. No changes made.' 'Prévia finalizada. Sem alterações.')"
   exit 0
 fi
 # END REMOVAL PREVIEW
