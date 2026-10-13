@@ -357,6 +357,13 @@ BOOTSTRAP_ADMIN_PASSWORD="$(env_value ZITADEL_BOOTSTRAP_ADMIN_PASSWORD || true)"
 [ -n "$MASTERKEY" ] || MASTERKEY="$(openssl rand -hex 16)"
 [ -n "$POSTGRES_PASSWORD" ] || POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 [ -n "$BOOTSTRAP_ADMIN_PASSWORD" ] || BOOTSTRAP_ADMIN_PASSWORD="T1!$(openssl rand -hex 18)"
+# Dedicated Login V2 cookie signing key: reuse after an interrupted bootstrap or upgrade.
+SESSION_COOKIE_SECRET="$(env_value ZITADEL_SESSION_COOKIE_SECRET || true)"
+[ -n "$SESSION_COOKIE_SECRET" ] || SESSION_COOKIE_SECRET="$(openssl rand -hex 32)"
+if [ "${#SESSION_COOKIE_SECRET}" -lt 32 ]; then
+  echo "$(vps_agent_text 'ERROR: ZITADEL_SESSION_COOKIE_SECRET must be at least 32 characters.' 'ERRO: ZITADEL_SESSION_COOKIE_SECRET deve ter pelo menos 32 caracteres.')" >&2
+  exit 1
+fi
 
 upsert_env VPS_AGENT_DOMAIN "$DOMAIN"
 upsert_env VPS_AGENT_PUBLIC_URL "https://$DOMAIN/mcp"
@@ -367,7 +374,8 @@ upsert_env VPS_AGENT_RESOURCE_METADATA_URL "https://$DOMAIN/.well-known/oauth-pr
 upsert_env VPS_AGENT_EDGE_NETWORK "$EDGE_NETWORK"
 upsert_env VPS_AGENT_TRAEFIK_CERTRESOLVER "$CERTRESOLVER"
 upsert_env VPS_AGENT_BUNDLED_PROXY "$BUNDLED_PROXY"
-upsert_env ZITADEL_VERSION v4.19.1
+upsert_env ZITADEL_VERSION v4.19.4
+upsert_env ZITADEL_SESSION_COOKIE_SECRET "$SESSION_COOKIE_SECRET"
 upsert_env ZITADEL_MASTERKEY "$MASTERKEY"
 upsert_env ZITADEL_POSTGRES_DB zitadel
 upsert_env ZITADEL_POSTGRES_USER zitadel
