@@ -7,6 +7,8 @@ on:
       - 'internal/gateway/adaptive_approval.go'
       - 'internal/gateway/adaptive_approval_test.go'
       - 'web/operator-approval/**'
+      - 'scripts/operator-approval-runtime-readiness.py'
+      - 'tests/scripts/test_operator_approval_runtime_readiness.py'
       - 'tests/browser/**'
       - '.github/workflows/adaptive-approval-browser.yml'
   push:
@@ -16,6 +18,8 @@ on:
       - 'internal/gateway/adaptive_approval.go'
       - 'internal/gateway/adaptive_approval_test.go'
       - 'web/operator-approval/**'
+      - 'scripts/operator-approval-runtime-readiness.py'
+      - 'tests/scripts/test_operator_approval_runtime_readiness.py'
       - 'tests/browser/**'
       - '.github/workflows/adaptive-approval-browser.yml'
   workflow_dispatch:
