@@ -110,7 +110,11 @@ def report(containers: list[dict], project: str) -> dict:
     )
     flags["apps_not_required_for_external_https"] = True
 
-    if not flags["gateway_running"] or not flags["broker_running"]:
+    # A duplicate service is ambiguous even when the last container inspected
+    # is stopped. Report the same STOP independent of Docker enumeration order.
+    if not flags["no_duplicate_service_containers"]:
+        state = "PORTAL_CONFIGURATION_INCOMPLETE"
+    elif not flags["gateway_running"] or not flags["broker_running"]:
         state = "GATEWAY_OR_BROKER_NOT_RUNNING"
     elif not flags["gateway_https_operator_url_present"]:
         state = "GATEWAY_MISSING_OPERATOR_URL"
