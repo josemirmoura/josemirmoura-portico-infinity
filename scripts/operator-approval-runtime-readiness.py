@@ -46,15 +46,23 @@ def valid_portal_url(raw: str, origin: str) -> bool:
 
 def report(containers: list[dict], project: str) -> dict:
     services: dict[str, dict] = {}
+    seen: dict[str, int] = {}
     for item in containers:
         labels = item.get("Config", {}).get("Labels") or {}
         if labels.get("com.docker.compose.project") != project:
             continue
         service = labels.get("com.docker.compose.service")
         if service in SCOPES:
+            seen[service] = seen.get(service, 0) + 1
             services[service] = item
 
     flags: dict[str, bool] = {}
+    # Docker can retain an old, stopped container with the same Compose
+    # service label. Selecting whichever inspect record happens to come last
+    # would make the verdict nondeterministic. Fail closed instead.
+    flags["no_duplicate_service_containers"] = all(
+        seen.get(service, 0) <= 1 for service in SCOPES
+    )
     for svc in SCOPES:
         obj = services.get(svc, {})
         flags[svc.replace("-", "_") + "_running"] = (
