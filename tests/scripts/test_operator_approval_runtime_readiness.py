@@ -130,6 +130,33 @@ class RuntimeReadinessTests(unittest.TestCase):
         self.assertFalse(payload["checks"]["portal_operator_id_matches_broker"])
         self.assertNotIn(SECRET, result.stdout)
 
+    def test_duplicate_service_fails_closed_independent_of_order(self):
+        containers = ready_containers()
+        stale = fake_container("gateway", {
+            "VPS_AGENT_OPERATOR_PORTAL_URL": ORIGIN + "/operator",
+            "VPS_AGENT_INSTANCE_ID": "node-1",
+        }, running=False)
+        for order in (containers + [stale], [stale] + containers):
+            with self.subTest(last=order[-1]["State"]["Running"]):
+                result = self.run_check(order)
+                self.assertEqual(result.returncode, 0)
+                payload = json.loads(result.stdout)
+                self.assertEqual(payload["status"], "PORTAL_CONFIGURATION_INCOMPLETE")
+                self.assertFalse(payload["checks"]["no_duplicate_service_containers"])
+                self.assertNotIn(SECRET, result.stdout + result.stderr)
+
+    def test_https_url_origin_mismatch_rejects_without_leaking_endpoint(self):
+        containers = ready_containers()
+        containers[0]["Config"]["Env"] = [
+            line.replace(ORIGIN + "/operator", "https://other.example.test/operator")
+            for line in containers[0]["Config"]["Env"]
+        ]
+        result = self.run_check(containers)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "PORTAL_CONFIGURATION_INCOMPLETE")
+        self.assertFalse(payload["checks"]["gateway_portal_url_matches_origin"])
+        self.assertNotIn("other.example.test", result.stdout + result.stderr)
+
     def test_docker_failure_is_redacted_and_fail_closed(self):
         result = self.run_check(MOCK_FAIL="1")
         self.assertEqual(result.returncode, 2)
