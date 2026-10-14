@@ -81,8 +81,13 @@ def report(containers: list[dict], project: str) -> dict:
     flags["gateway_portal_url_matches_origin"] = valid_portal_url(
         gateway_url, origin
     )
-    flags["portal_password_verifier_present"] = bool(
-        p.get("PORTICO_OPERATOR_PASSWORD_SCRYPT")
+    # The portal expects a 24-byte hex salt and 32-byte scrypt digest.
+    # A nonempty but malformed verifier cannot authenticate an operator.
+    flags["portal_password_verifier_format_valid"] = bool(
+        re.fullmatch(
+            r"[0-9a-fA-F]{48}:[0-9a-fA-F]{64}",
+            p.get("PORTICO_OPERATOR_PASSWORD_SCRYPT", ""),
+        )
     )
     # Compare token only in process memory; never print or return its value.
     broker_token = b.get("VPS_AGENT_OPERATOR_APPROVAL_TOKEN", "")
