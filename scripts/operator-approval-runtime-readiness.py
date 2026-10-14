@@ -167,7 +167,10 @@ def main() -> int:
             print("  " + name + ": " + ("YES" if value else "NO"))
         print("  Live HTTPS/login/grants: NOT_TESTED")
         print("  No Docker changes; no configuration values printed.")
-    return 0
+    # A diagnostic STOP must not be mistaken for a successful preflight in
+    # an automated operator checklist. Even 0 means candidate configuration,
+    # never proof of login, HTTPS availability or actual grants.
+    return 0 if result["status"] == "CONFIGURED_NOT_BROWSER_VERIFIED" else 1
 
 
 if __name__ == "__main__":
