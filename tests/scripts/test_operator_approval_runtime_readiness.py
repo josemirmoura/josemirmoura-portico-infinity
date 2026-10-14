@@ -12,7 +12,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/operator-approval-runtime-readiness.py"
 SECRET = "PRIVATE-OPERATOR-TOKEN-DO-NOT-PRINT-" + ("x" * 48)
-PASSWORD = "SECRET-SCRYPT-DO-NOT-PRINT"
+PASSWORD = ("a" * 48) + ":" + ("b" * 64)
 ORIGIN = "https://example.test"
 PROJECT = "mcp-vps-agent"
 
@@ -160,6 +160,19 @@ class RuntimeReadinessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "PORTAL_CONFIGURATION_INCOMPLETE")
         self.assertFalse(payload["checks"]["gateway_portal_url_matches_origin"])
         self.assertNotIn("other.example.test", result.stdout + result.stderr)
+
+    def test_invalid_scrypt_verifier_rejected_without_disclosure(self):
+        containers = ready_containers()
+        containers[2]["Config"]["Env"] = [
+            line.replace(PASSWORD, "not-a-valid-verifier")
+            for line in containers[2]["Config"]["Env"]
+        ]
+        result = self.run_check(containers)
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "PORTAL_CONFIGURATION_INCOMPLETE")
+        self.assertFalse(payload["checks"]["portal_password_verifier_format_valid"])
+        self.assertNotIn("not-a-valid-verifier", result.stdout + result.stderr)
 
     def test_docker_failure_is_redacted_and_fail_closed(self):
         result = self.run_check(MOCK_FAIL="1")
