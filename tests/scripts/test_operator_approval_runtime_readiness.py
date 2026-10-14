@@ -103,12 +103,14 @@ class RuntimeReadinessTests(unittest.TestCase):
         containers = ready_containers()
         containers[0]["Config"]["Env"] = ["VPS_AGENT_INSTANCE_ID=node-1"]
         result = self.run_check(containers)
+        self.assertEqual(result.returncode, 1)
         self.assertEqual(json.loads(result.stdout)["status"], "GATEWAY_MISSING_OPERATOR_URL")
 
     def test_portal_not_running_stops_ready_label(self):
         containers = ready_containers()
         containers[2]["State"]["Running"] = False
         result = self.run_check(containers)
+        self.assertEqual(result.returncode, 1)
         self.assertEqual(json.loads(result.stdout)["status"], "OPERATOR_PORTAL_NOT_RUNNING")
 
     def test_project_label_does_not_accept_foreign_container(self):
@@ -124,6 +126,7 @@ class RuntimeReadinessTests(unittest.TestCase):
             for val in containers[2]["Config"]["Env"]
         ]
         result = self.run_check(containers)
+        self.assertEqual(result.returncode, 1)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["status"], "PORTAL_CONFIGURATION_INCOMPLETE")
         self.assertFalse(payload["checks"]["portal_broker_token_match"])
@@ -139,7 +142,7 @@ class RuntimeReadinessTests(unittest.TestCase):
         for order in (containers + [stale], [stale] + containers):
             with self.subTest(last=order[-1]["State"]["Running"]):
                 result = self.run_check(order)
-                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.returncode, 1)
                 payload = json.loads(result.stdout)
                 self.assertEqual(payload["status"], "PORTAL_CONFIGURATION_INCOMPLETE")
                 self.assertFalse(payload["checks"]["no_duplicate_service_containers"])
@@ -152,6 +155,7 @@ class RuntimeReadinessTests(unittest.TestCase):
             for line in containers[0]["Config"]["Env"]
         ]
         result = self.run_check(containers)
+        self.assertEqual(result.returncode, 1)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["status"], "PORTAL_CONFIGURATION_INCOMPLETE")
         self.assertFalse(payload["checks"]["gateway_portal_url_matches_origin"])
