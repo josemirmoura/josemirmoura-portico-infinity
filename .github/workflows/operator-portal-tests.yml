@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'web/operator-approval/**'
+      - 'scripts/operator-approval-runtime-readiness.py'
+      - 'tests/scripts/test_operator_approval_runtime_readiness.py'
       - '.github/workflows/operator-portal-tests.yml'
       - 'cmd/vps-agent-broker/operator_bridge*'
       - 'cmd/vps-agent-broker/main.go'
